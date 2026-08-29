@@ -1470,6 +1470,30 @@ def test_rate_limit_gives_up_after_two_retries(meeting_home, flac, monkeypatch):
     assert "429" in job["error"]
 
 
+def test_finalize_failure_routes_job_to_failed(meeting_home, monkeypatch):
+    """WAV hilang saat finalisasi → job ke failed/ (bukan loop tanpa batas di pending)."""
+    from meeting import paths
+    paths.ensure_dirs()
+    job = make_job(wav="tmp/tidak_ada.wav", needs_finalization=True)
+    queuer.enqueue(job)
+
+    calls = []
+    monkeypatch.setattr(
+        worker, "transcribe_audio",
+        lambda audio_path, job, client=None: calls.append(1) or {"status": "done"},
+    )
+    assert worker.run_once() is True
+    assert calls == []  # transkripsi tidak pernah dipanggil
+    failed = json.loads(
+        list(paths.queue_dir("failed").glob("*.json"))[0].read_text(encoding="utf-8")
+    )
+    assert failed["status"] == "failed"
+    assert "tidak_ada" in failed["error"]
+    assert not list(paths.queue_dir("pending").glob("*.json"))
+    from meeting import indexmd
+    assert indexmd.rows()[0]["status"] == "failed"
+
+
 def test_run_once_finalizes_wav_before_transcribe(meeting_home, monkeypatch, tmp_path):
     from meeting import finalizer as fin
     from meeting import paths
@@ -1563,6 +1587,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -1594,6 +1619,25 @@ def _log(level: str, msg: str) -> None:
 
 
 def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        # os.kill(pid, 0) di Windows = CTRL_C_EVENT (bukan probe!) — pakai Win32 API.
+        import ctypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        kernel32 = ctypes.windll.kernel32
+        h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not h:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(h, ctypes.byref(code)):
+                return False
+            return code.value == STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(h)
     try:
         os.kill(pid, 0)
         return True
@@ -1657,17 +1701,30 @@ def _move_job(job_path: Path, dest_sub: str, job: dict) -> Path:
     return dest
 
 
+def _fail_job(job: dict, job_path: Path, err: Exception) -> None:
+    """Bawa job ke failed/ dengan bookkeeping lengkap (INDEX + error field). Audio tak disentuh."""
+    job["status"] = "failed"
+    job["error"] = f"{type(err).__name__}: {err}"
+    _upsert_index(job, "failed")
+    _move_job(job_path, "failed", job)
+    _log("error", f"{job['id']} failed: {job['error']}")
+
+
 def process(job: dict, job_path: Path) -> None:
     """Satu job: finalisasi (bila perlu) → transkripsi (dengan retry 429) → done/failed."""
     if job.get("needs_finalization"):
         # wav bisa string (mic/sys) atau list (both)
-        raw = job["wav"]
-        wav_list = [raw] if isinstance(raw, str) else list(raw)
-        wavs = [
-            Path(w) if Path(w).is_absolute() else paths.home() / "data" / w
-            for w in wav_list
-        ]
-        flac = finalizer.finalize(wavs, job["id"])
+        try:
+            raw = job["wav"]
+            wav_list = [raw] if isinstance(raw, str) else list(raw)
+            wavs = [
+                Path(w) if Path(w).is_absolute() else paths.home() / "data" / w
+                for w in wav_list
+            ]
+            flac = finalizer.finalize(wavs, job["id"])
+        except Exception as e:
+            _fail_job(job, job_path, e)
+            return
         job["audio"] = str(flac.relative_to(paths.home() / "data"))
         job["needs_finalization"] = False
 
@@ -1709,11 +1766,8 @@ def process(job: dict, job_path: Path) -> None:
             _log("warn", f"{job['id']} attempt {attempt + 1} gagal ({last_err}); backoff")
             time.sleep(BACKOFF_SCHEDULE[attempt])
 
-    job["status"] = "failed"
-    job["error"] = f"{type(last_err).__name__}: {last_err}"
-    _upsert_index(job, "failed")
-    _move_job(job_path, "failed", job)
-    _log("error", f"{job['id']} failed: {job['error']}")
+    assert last_err is not None
+    _fail_job(job, job_path, last_err)
 
 
 def _oldest_pending() -> Path | None:
@@ -1764,7 +1818,7 @@ if __name__ == "__main__":
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest tests/test_worker.py -v`
-Expected: 10 PASS
+Expected: 11 PASS
 
 - [ ] **Step 5: Commit**
 
@@ -1868,6 +1922,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from datetime import datetime
 
 from . import paths
@@ -1878,6 +1933,25 @@ class SessionActiveError(RuntimeError):
 
 
 def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        # os.kill(pid, 0) di Windows = CTRL_C_EVENT (bukan probe!) — pakai Win32 API.
+        import ctypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        kernel32 = ctypes.windll.kernel32
+        h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not h:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(h, ctypes.byref(code)):
+                return False
+            return code.value == STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(h)
     try:
         os.kill(pid, 0)
         return True
