@@ -130,20 +130,20 @@ meeting devices       # listing + pilih device input/output
 | Tahap | Format | Alasan |
 |---|---|---|
 | Saat merekam | WAV mono 16 kHz, ditulis tiap ~5 detik | Tanpa encoder di jalur panas; chunk kecil = crash-safe |
-| Setelah stop | FLAC mono 16 kHz | Didukung Gemini, lossless, ~50% lebih kecil |
-| Estimasi ukuran | WAV ≈ 55 MB/jam → FLAC ≈ 25–30 MB/jam; meeting 3 jam ≈ 90 MB | Aman untuk disk |
+| Setelah stop | FLAC mono 16 kHz | Didukung Gemini, lossless, ~75% lebih kecil |
+| Estimasi ukuran | WAV ≈ 115 MB/jam (32 kB/s) → FLAC ≈ 25–30 MB/jam; meeting 3 jam: WAV sementara ≈ 345 MB, FLAC final ≈ 90 MB | Aman untuk disk; WAV dihapus setelah FLAC final tersimpan |
 
 **Sumber audio:**
 - `--mic`: `sounddevice` membuka default input Windows (mic laptop atau headset — ikut default sistem; dapat dipilih eksplisit via `meeting devices`)
 - `--sys`: WASAPI loopback — kandidat library `soundcard` (pure Python) atau `pyaudiowpatch`; keputusan final melalui tes singkat di mesin pengguna saat implementasi, bukan asumsi
-- `--both`: dua stream paralel → dua file WAV → digabung saat finalisasi menjadi satu FLAC (mic kiri, sistem kanan) — detail mixing diputuskan saat implementasi, target satu job transkripsi
+- `--both`: dua stream paralel → dua file WAV → digabung saat finalisasi menjadi satu FLAC stereo (mic di kanal kiri, sistem di kanan) → satu job transkripsi. Bila tes implementasi menunjukkan hasil transkripsi stereo lebih buruk, fallback: mixdown mono sederhana.
 
 ### Edge Cases
 
 1. **Crash/force-quit di tengah sesi** — WAV incremental tetap ada. `meeting record` berikutnya mendeteksi `_session.wav` yatim → menawarkan finalisasi & transkrip, atau buang. Tidak ada rekaman yang hilang diam-diam.
 2. **Meeting back-to-back** — target terminal bebas < 10 detik setelah stop; bila finalisasi file besar terasa lambat, finalisasi dipindahkan ke worker (keputusan implementasi).
 3. **Device dicabut di tengah sesi** — stream mati → rekaman dihentikan rapi (setara Ctrl+C), bukan crash korup.
-4. **Disk penuh** — cek ruang sebelum mulai (~60 MB/jam); kegagalan menulis chunk = stop rapi + pesan jelas.
+4. **Disk penuh** — cek ruang sebelum mulai (WAV ≈ 115 MB/jam, dua kali itu untuk `--both`); kegagalan menulis chunk = stop rapi + pesan jelas.
 5. **Laptop sleep** — stream mati → stop rapi; audio sampai titik itu selamat. Mencegah sleep adalah urusan power settings Windows, bukan tool ini.
 6. **Rekaman kosong/senyap** — tetap diproses; durasi tercatat di `meta.json` sehingga anomali terlihat di INDEX.md.
 
