@@ -69,6 +69,8 @@ Pengguna punya jadwal meeting padat dan back-to-back, dan harus mencatat setiap 
 
 **Pendekatan: CLI + worker terpisah.** Dipilih karena kendala utama pengguna adalah jadwal meeting padat — stop rekaman harus langsung membebaskan terminal, dan transkripsi berjalan di belakang tanpa daemon permanen. Alternatif yang dipertimbangkan: CLI satu proses (terminal sibuk setelah stop — ditolak karena menghalangi meeting berikutnya) dan web app lokal (lebih lama dibangun, browsing folder dinilai cukup — ditunda, lihat Arah Masa Depan).
 
+**Dua frontend, satu core:** CLI dan floating record button (lihat bagian tersebut) sama-sama klien di atas core bersama — keduanya memicu `recorder` dan menulis job ke antrian yang sama, terkoordinasi via session-file lock.
+
 ### Komponen & Tanggung Jawab
 
 | Komponen | Tugas | Tidak tahu tentang |
@@ -116,6 +118,18 @@ meeting list          # daftar meeting dari INDEX.md, terbaru di atas
 meeting retry         # kembalikan semua job failed/ ke pending/, spawn worker
 meeting devices       # listing + pilih device input/output
 ```
+
+### Floating Record Button
+
+Alternatif GUI untuk start/stop rekam tanpa mengetik — frontend kedua di samping CLI, di atas core yang sama (antrian + worker tidak berubah):
+
+- Widget tkinter kecil, jendela borderless always-on-top (~56×56px), dapat di-drag, posisi diingat (`config.json`)
+- **Idle**: titik abu-abu → klik mulai merekam
+- **Merekam**: titik merah berdenyut + timer berjalan (indikator "sedang mendengarkan")
+- **Stop** (klik lagi): finalisasi → tulis job ke antrian → kembali idle dengan kilatan "✓ tersimpan"
+- Sumber rekam mengikuti mode terakhir di `config.json` (sama seperti `meeting record` tanpa argumen); anti-dobel lintas proses via session-file lock yang sama dengan CLI
+- Dijalankan dengan `meeting button` (auto-start saat login Windows: shortcut ke folder Startup — opsional, dijelaskan di README)
+- Widget mati/crash saat merekam → recorder yang berjalan di proses terpisah tetap menulis WAV; `meeting record`/`meeting button` berikutnya menawarkan pemulihan sesi yatim (sama seperti CLI)
 
 ### Perilaku Penting
 
@@ -211,7 +225,7 @@ GEMINI_API_KEY=...
 
 - **Unit:** protokol antrian (tulis job → worker ambil → pindah done/failed), finalizer WAV→FLAC, retry logic — dengan audio sintetis pendek
 - **Integration:** rekam 10 detik nyata → transkrip → assert `.md` ada dan berisi teks
-- **Manual checklist per rilis:** `--mic`, `--sys`, `--both`, crash-kill di tengah sesi, back-to-back record, `transcribe` mp4
+- **Manual checklist per rilis:** `--mic`, `--sys`, `--both`, crash-kill di tengah sesi, back-to-back record, `transcribe` mp4, toggle rekam via floating button, anti-dobel (tombol merekam → `meeting record` ditolak, dan sebaliknya)
 
 ## Arah Masa Depan: Web App
 
