@@ -1,3 +1,7 @@
+import json
+
+import pytest
+
 from meeting import paths
 
 
@@ -19,3 +23,51 @@ def test_ensure_dirs_creates_all(meeting_home):
         paths.tmp_dir(),
     ):
         assert d.is_dir(), f"missing {d}"
+
+
+from meeting import config
+
+
+def test_load_creates_default_on_first_run(meeting_home):
+    cfg = config.load()
+    assert cfg == {"model": "gemini-flash", "default_source": "mic", "mic_device": None}
+    assert config_file_json_exists()
+
+
+def config_file_json_exists():
+    from meeting import paths
+    return paths.config_file().is_file()
+
+
+def test_load_merges_file_over_defaults(meeting_home):
+    from meeting import paths
+    paths.config_file().write_text('{"model": "gemini-2.5-pro"}', encoding="utf-8")
+    cfg = config.load()
+    assert cfg["model"] == "gemini-2.5-pro"
+    assert cfg["default_source"] == "mic"  # default tetap terisi
+
+
+def test_load_rejects_corrupt_json(meeting_home):
+    from meeting import paths
+    paths.config_file().write_text("{not json", encoding="utf-8")
+    with pytest.raises(config.ConfigError):
+        config.load()
+
+
+def test_update_persists_atomically(meeting_home):
+    cfg = config.update(default_source="sys")
+    assert cfg["default_source"] == "sys"
+    assert config.load()["default_source"] == "sys"
+
+
+def test_api_key_from_env_file(meeting_home):
+    from meeting import paths
+    assert config.api_key() is None  # belum ada .env
+    paths.env_file().write_text("GEMINI_API_KEY=abc123\n", encoding="utf-8")
+    assert config.api_key() == "abc123"
+
+
+def test_api_key_never_leaks_into_cfg(meeting_home):
+    from meeting import paths
+    paths.env_file().write_text("GEMINI_API_KEY=abc123\n", encoding="utf-8")
+    assert "api_key" not in config.load()
