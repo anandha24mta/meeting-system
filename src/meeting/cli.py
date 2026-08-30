@@ -83,17 +83,19 @@ def cmd_record(args) -> int:
         "status": "pending",
     }
     queuer.enqueue(job)
+    # enqueue bisa men-suffix id saat tabrakan menit-yang-sama — pakai id final
+    # (job["id"] sudah di-update enqueue) utk INDEX & pesan agar tidak ada baris hantu
     indexmd.upsert(
         {
-            "id": job_id,
+            "id": job["id"],
             "tanggal": job["created_at"].replace("T", " "),
             "durasi": indexmd.fmt_duration(durasi),
             "status": "pending",
-            "path": f"data/output/{job_id}/transcript.md",
+            "path": f"data/output/{job['id']}/transcript.md",
         }
     )
     queuer.spawn_worker()
-    print(f"Selesai merekam ({indexmd.fmt_duration(durasi)}). Job antrean: {job_id}")
+    print(f"Selesai merekam ({indexmd.fmt_duration(durasi)}). Job antrean: {job['id']}")
     print(f"Terminal bebas — transkripsi jalan di background. Lihat: meeting status")
     return 0
 
@@ -172,17 +174,18 @@ def cmd_transcribe(args) -> int:
         "status": "pending",
     }
     queuer.enqueue(job)
+    # id final bisa ber-suffix (tabrakan menit-yang-sama) — pakai job["id"]
     indexmd.upsert(
         {
-            "id": job_id,
+            "id": job["id"],
             "tanggal": job["created_at"].replace("T", " "),
             "durasi": "-",
             "status": "pending",
-            "path": f"data/output/{job_id}/transcript.md",
+            "path": f"data/output/{job['id']}/transcript.md",
         }
     )
     queuer.spawn_worker()
-    print(f"Job dibuat: {job_id} — meeting status untuk progres")
+    print(f"Job dibuat: {job['id']} — meeting status untuk progres")
     return 0
 
 
