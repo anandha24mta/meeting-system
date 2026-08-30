@@ -2164,6 +2164,93 @@ def test_record_sys_uses_loopback(meeting_home, monkeypatch):
     assert sr == 16000 and len(data) == 4000
 
 
+def test_record_both_writes_two_wavs_min_duration(meeting_home, monkeypatch, fake_sd):
+    """--both: dua thread, dua WAV; durasi = min(mic, sys); device_lost False."""
+    from meeting import paths, session
+    paths.ensure_dirs()
+    monkeypatch.setattr(recorder.time, "sleep", lambda s: session.request_stop())
+
+    class FakeMic:
+        def recorder(self, *, samplerate, blocksize, channels, exclusive_mode):
+            class Rec:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *a):
+                    pass
+
+                def __iter__(self):
+                    t = np.linspace(0, 0.25, 4000, endpoint=False)
+                    yield (0.1 * np.sin(2 * np.pi * 300 * t)).astype(np.float32)
+
+            return Rec()
+
+    class FakeSC:
+        @staticmethod
+        def default_speaker():
+            class S:
+                name = "Speakers (Realtek)"
+            return S()
+
+        @staticmethod
+        def get_microphone(id, include_loopback):
+            return FakeMic()
+
+    import sys as _s
+    monkeypatch.setitem(_s.modules, "soundcard", FakeSC)
+
+    meta = recorder.record("both", "2026-08-29_1400")
+    assert meta["device_lost"] is False
+    assert len(meta["wav_paths"]) == 2  # mic + sys
+    frames = sorted(sf.info(w).frames for w in meta["wav_paths"])
+    assert frames == [4000, 8000]  # sys 0.25 s, mic 0.5 s
+    assert meta["duration_sec"] == pytest.approx(0.25)  # min(mic, sys)
+
+
+def test_record_both_worker_crash_sets_device_lost(meeting_home, monkeypatch, fake_sd):
+    """Worker mic mati karena error non-_Stop (mis. import) → errs terisi, lost True, tidak hang."""
+    from meeting import paths, session
+    paths.ensure_dirs()
+
+    def boom(*a, **kw):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(recorder, "_record_mic", boom)
+
+    class FakeMic:
+        def recorder(self, *, samplerate, blocksize, channels, exclusive_mode):
+            class Rec:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *a):
+                    pass
+
+                def __iter__(self):
+                    t = np.linspace(0, 0.25, 4000, endpoint=False)
+                    yield (0.1 * np.sin(2 * np.pi * 300 * t)).astype(np.float32)
+
+            return Rec()
+
+    class FakeSC:
+        @staticmethod
+        def default_speaker():
+            class S:
+                name = "Speakers (Realtek)"
+            return S()
+
+        @staticmethod
+        def get_microphone(id, include_loopback):
+            return FakeMic()
+
+    import sys as _s
+    monkeypatch.setitem(_s.modules, "soundcard", FakeSC)
+
+    meta = recorder.record("both", "2026-08-29_1400")
+    assert meta["device_lost"] is True  # kegagalan worker tidak lagi "laundry" jadi sukses
+    assert paths.tmp_dir().joinpath("2026-08-29_1400_sys.wav").exists()  # sys tetap terekam
+
+
 def test_record_device_lost_stops_clean(meeting_home, monkeypatch, fake_sd):
     """Stream mati di tengah (0.25 s sudah terekam) → return meta rapi, WAV valid."""
     from meeting import paths
@@ -2350,18 +2437,18 @@ def record(source: str, job_id: str, mic_device: str | None = None) -> dict:
     elif source == "both":
         wav_m = tmp / f"{job_id}_mic.wav"
         wav_s = tmp / f"{job_id}_sys.wav"
-        errs: list[_Stop] = []
+        errs: list[Exception] = []
 
         def run_mic():
             try:
                 _record_mic(job_id, wav_m, mic_device)
-            except _Stop as e:
+            except Exception as e:  # _Stop, disk-full, import gagal — semua berhenti rapi
                 errs.append(e)
 
         def run_sys():
             try:
                 _record_sys(job_id, wav_s)
-            except _Stop as e:
+            except Exception as e:
                 errs.append(e)
 
         tm = threading.Thread(target=run_mic)
@@ -2399,7 +2486,7 @@ def _frames_of(wav: Path) -> int:
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest tests/test_recorder.py -v`
-Expected: 5 PASS
+Expected: 7 PASS
 
 - [ ] **Step 5: Commit**
 
