@@ -21,7 +21,8 @@ def offer_recovery(ui_confirm) -> dict | None:
     if not orphans:
         return None
     meta = orphans[0]
-    durasi = indexmd.fmt_duration(_frames(meta) / 16000)
+    dur = _frames(meta) / 16000  # hitung SEBELUM finalize — finalize menghapus WAV
+    durasi = indexmd.fmt_duration(dur)
     msg = (
         f"Ditemukan rekaman yatim dari sesi yang tidak selesai (id {meta['id']}, "
         f"mulai {meta.get('started_at')}, ≈{durasi}). Finalisasi & transkripsi sekarang? "
@@ -47,7 +48,7 @@ def offer_recovery(ui_confirm) -> dict | None:
         "wav": None,
         "original_path": None,
         "needs_finalization": False,
-        "duration_sec": _frames(meta) / 16000,
+        "duration_sec": dur,
         "device": meta.get("device"),
         "model": _current_model(),
         "status": "pending",

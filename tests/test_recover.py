@@ -1,6 +1,7 @@
 import json
 
 import numpy as np
+import pytest
 import soundfile as sf
 
 from meeting import recover
@@ -48,6 +49,7 @@ def test_offer_recovery_confirmed_finalizes_and_enqueues(meeting_home, monkeypat
 
     job = recover.offer_recovery(ui_confirm=lambda msg: True)
     assert job is not None and job["id"] == "2026-08-28_0900"
+    assert job["duration_sec"] == pytest.approx(0.3)  # durasi asli, bukan 0 (WAV sudah dihapus finalize)
     # FLAC final ada, WAV dibersihkan oleh finalizer
     assert (paths.recordings_dir() / "2026-08-28_0900.flac").exists()
     pend = list(paths.queue_dir("pending").glob("*.json"))
