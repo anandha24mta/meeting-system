@@ -3004,6 +3004,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -3054,10 +3055,11 @@ def cmd_record(args) -> int:
     try:
         meta = recorder.record(source, job_id, mic_device=cfg.get("mic_device"))
     except KeyboardInterrupt:
-        # Ctrl+C: recorder berhenti karena stop-flag (di-set handler di bawah);
-        # bila interrupt menghentikan record() sebelum return, baca WAV dari disk —
-        # incremental writer menjamin file valid apa adanya.
+        # Ctrl+C: set stop-flag lalu TUNGGU thread recorder berhenti sebelum
+        # finish() menghapus flag — tanpa ini, thread --both (poll 0.2-0.5 s)
+        # tidak sempat melihat flag dan merekam selamanya (terminal tak bebas).
         session.request_stop()
+        time.sleep(1.0)  # beri waktu loop poll kedua stream melihat flag & close WAV
         meta = _meta_from_disk(job_id, source)
 
     if not meta["wav_paths"]:
@@ -3131,7 +3133,11 @@ def cmd_transcribe(args) -> int:
         return 1
     ext = src.suffix.lower()
     cfg = config.load()
-    job_id = queuer.new_job_id(Path(src).stem.replace(" ", "_")[:40] or None)
+    stem = re.sub(r"[^A-Za-z0-9_-]", "_", Path(src).stem)[:40]
+    job_id = queuer.new_job_id(stem or None)
+    if not queuer.is_valid_id(job_id):
+        _eprint(f"nama file tidak bisa dijadikan id job: {job_id!r}")
+        return 1
     audio_rel: str
     needs_fin = False
 

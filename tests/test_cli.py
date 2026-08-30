@@ -134,6 +134,19 @@ def test_transcribe_supported_extension_direct(meeting_home, tmp_path, monkeypat
     assert src.exists()  # file asli tak tersentuh
 
 
+def test_transcribe_sanitizes_exotic_filename(meeting_home, tmp_path, monkeypatch):
+    """Stem dgn titik/kurung (nama file Zoom asli) → id legal, bukan traceback."""
+    monkeypatch.setattr(cli.queuer, "spawn_worker", lambda: None)
+    src = tmp_path / "Zoom Meeting 2026-08-28 20.15.42.wav"
+    src.write_bytes(b"\x00" * 16)
+    rc = cli.main(["transcribe", str(src)])
+    assert rc == 0
+    job = json.loads(list(paths.queue_dir("pending").glob("*.json"))[0].read_text(encoding="utf-8"))
+    from meeting import queuer as q
+    assert q.is_valid_id(job["id"])
+    assert "20_15_42" in job["id"]  # titik diganti _
+
+
 def test_transcribe_unsupported_without_ffmpeg(meeting_home, tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli.shutil, "which", lambda x: None)
     src = tmp_path / "old.ape"
