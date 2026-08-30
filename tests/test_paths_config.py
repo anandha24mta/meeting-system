@@ -71,3 +71,21 @@ def test_api_key_never_leaks_into_cfg(meeting_home):
     from meeting import paths
     paths.env_file().write_text("GEMINI_API_KEY=abc123\n", encoding="utf-8")
     assert "api_key" not in config.load()
+
+
+def test_load_rejects_non_dict_config(meeting_home):
+    """config.json berisi array (mis. [1,2]) → ConfigError jelas, bukan
+    TypeError mentah dari cfg.update()."""
+    from meeting import paths
+    paths.config_file().write_text("[1, 2]", encoding="utf-8")
+    with pytest.raises(config.ConfigError):
+        config.load()
+
+
+def test_api_key_strips_surrounding_quotes(meeting_home):
+    """Konvensi .env: nilai boleh dikutip — kutip bukan bagian key."""
+    from meeting import paths
+    paths.env_file().write_text('GEMINI_API_KEY="abc123"\n', encoding="utf-8")
+    assert config.api_key() == "abc123"
+    paths.env_file().write_text("GEMINI_API_KEY='abc123'\n", encoding="utf-8")
+    assert config.api_key() == "abc123"

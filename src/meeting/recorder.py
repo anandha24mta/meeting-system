@@ -89,7 +89,7 @@ def _record_sys(job_id: str, wav: Path) -> float:
                 n += len(block)
                 if session.stop_requested():
                     break
-    except (OSError, Exception) as e:  # termasuk device dicabut
+    except Exception as e:  # termasuk device dicabut
         raise _Stop(f"loopback error: {e}") from e
     finally:
         try:
@@ -157,7 +157,7 @@ def record(source: str, job_id: str, mic_device: str | None = None) -> dict:
             tm.join(timeout=5); ts.join(timeout=5)
         else:
             tm.join(); ts.join()
-        dur = min(_frames_of(wav_m), _frames_of(wav_s)) / SAMPLE_RATE or 0
+        dur = min(_frames_of(wav_m), _frames_of(wav_s)) / SAMPLE_RATE
         wavs = [wav_m, wav_s]
     else:
         raise RecorderError(f"sumber tidak dikenal: {source!r} (mic|sys|both)")

@@ -26,6 +26,11 @@ def load() -> dict:
         raise ConfigError(
             f"config.json korup: {e}. Perbaiki manual di {path} atau hapus untuk reset."
         ) from e
+    if not isinstance(data, dict):
+        raise ConfigError(
+            f"config.json harus objek berisi preferensi, bukan {type(data).__name__}. "
+            f"Perbaiki manual di {path} atau hapus untuk reset."
+        )
     cfg = dict(DEFAULTS)
     cfg.update(data)
     return cfg
@@ -53,12 +58,17 @@ def update(**kv) -> dict:
 
 
 def api_key() -> str | None:
-    """Baca GEMINI_API_KEY dari .env. Format KEY=VALUE per baris; abaikan yang lain."""
+    """Baca GEMINI_API_KEY dari .env. Format KEY=VALUE per baris; abaikan yang lain.
+    Kutip yang mengelilingi nilai ("abc"/'abc') dibuang — konvensi .env umum;
+    tanpa ini key terkutip lolos ke Gemini dan errornya membingungkan."""
     path = paths.env_file()
     if not path.exists():
         return None
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if line.startswith("GEMINI_API_KEY="):
-            return line.split("=", 1)[1].strip() or None
+            val = line.split("=", 1)[1].strip()
+            if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+                val = val[1:-1]
+            return val or None
     return None

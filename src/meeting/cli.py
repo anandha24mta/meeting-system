@@ -67,7 +67,7 @@ def cmd_record(args) -> int:
         return 1
 
     wav_rel = [str(w.relative_to(paths.home() / "data")) for w in meta["wav_paths"]]
-    meta_out = session.finish()
+    session.finish()
     durasi = meta["duration_sec"]
     job = {
         "id": job_id,

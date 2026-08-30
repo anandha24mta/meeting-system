@@ -125,12 +125,6 @@ class FloatingButton:
             session.request_stop()  # recorder proses lain menulis WAV tetap
         self.root.destroy()
 
-    def _on_click(self, ev):  # dipertahankan utk kompatibilitas pemanggilan manual/test
-        if self.state.phase == "idle":
-            self._start_recording()
-        elif self.state.phase == "recording":
-            self._stop_recording()
-
     def _start_recording(self):
         recover.offer_recovery(
             ui_confirm=lambda msg: messagebox.askyesno("Rekaman yatim", msg)

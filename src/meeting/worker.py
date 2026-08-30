@@ -9,7 +9,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import config, finalizer, indexmd, paths, queuer
+from . import finalizer, indexmd, paths
 from .transcribe import TranscribeError, transcribe_audio  # nama di-import agar test dapat monkeypatch worker.transcribe_audio
 
 BACKOFF_SCHEDULE = (60.0, 300.0)  # 429: 60s lalu 5 menit, maks 2 retry

@@ -53,9 +53,6 @@ def test_set_mic_persists_config(monkeypatch, meeting_home):
 
 
 # ... lanjutan test_cli.py (setelah bagian devices Task 11)
-import json
-from pathlib import Path
-
 import pytest
 
 from meeting import cli, config, paths, queuer, session
