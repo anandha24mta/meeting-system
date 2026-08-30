@@ -37,7 +37,9 @@ def _pid_alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
         return True
-    except (ProcessLookupError, PermissionError, OSError):
+    except PermissionError:
+        return True  # EPERM di POSIX = proses ada, milik user lain
+    except OSError:
         return False
 
 
