@@ -2582,6 +2582,96 @@ def test_offer_recovery_declined_moves_to_discarded(meeting_home):
 
 def test_offer_recovery_no_orphan_returns_none(meeting_home):
     assert recover.offer_recovery(ui_confirm=lambda msg: True) is None
+
+
+def orphan_session_as_written(meeting_home, pid=999999):
+    """Session file PERSIS seperti cli.cmd_record / button tulis saat start:
+    `wav_paths: []` (file session tidak pernah di-update saat merekam), PID mati,
+    WAV incremental nyata sudah ada di tmp/."""
+    from meeting import paths
+    paths.ensure_dirs()
+    wav = write_wav(paths.tmp_dir() / "2026-08-28_0900_mic.wav")
+    paths.session_file().write_text(
+        json.dumps({
+            "pid": pid, "id": "2026-08-28_0900", "source": "mic",
+            "started_at": "2026-08-28T09:00:00", "device": "mic default",
+            "wav_paths": [],
+        }),
+        encoding="utf-8",
+    )
+    return wav
+
+
+def test_recovery_from_empty_wav_paths_globs_tmp(meeting_home, monkeypatch):
+    """Sesi yatim PERSIS seperti cmd_record menulisnya (wav_paths: [], PID mati,
+    WAV nyata di tmp/) → recovery harus tetap finalisasi & enqueue (via glob)."""
+    from meeting import paths, queuer
+    wav = orphan_session_as_written(meeting_home)
+    monkeypatch.setattr(queuer, "spawn_worker", lambda: None)
+
+    job = recover.offer_recovery(ui_confirm=lambda msg: True)
+
+    assert job is not None and job["id"] == "2026-08-28_0900"
+    assert job["duration_sec"] == pytest.approx(0.3)
+    assert (paths.recordings_dir() / "2026-08-28_0900.flac").exists()
+    assert len(list(paths.queue_dir("pending").glob("*.json"))) == 1
+    assert not paths.session_file().exists()  # tidak wedged — session dibersihkan
+    assert not wav.exists()  # WAV dimakan finalize (FLAC tersimpan)
+
+
+def test_recovery_no_wavs_anywhere_returns_none_no_raise(meeting_home):
+    """Sesi yatim tanpa WAV di mana pun (wav_paths kosong, tmp/ kosong) →
+    offer_recovery TIDAK boleh raise; session file dihapus; return None."""
+    from meeting import paths
+    paths.ensure_dirs()
+    paths.session_file().write_text(
+        json.dumps({
+            "pid": 999999, "id": "2026-08-28_0900", "source": "mic",
+            "started_at": "2026-08-28T09:00:00", "device": "mic default",
+            "wav_paths": [],
+        }),
+        encoding="utf-8",
+    )
+
+    job = recover.offer_recovery(ui_confirm=lambda msg: True)
+
+    assert job is None
+    assert not paths.session_file().exists()
+    assert list(paths.tmp_dir().glob("*.wav")) == []
+    assert not (paths.recordings_dir() / "2026-08-28_0900.flac").exists()
+
+
+def test_recovery_declined_with_empty_wav_paths_moves_globs(meeting_home):
+    """Tolak recovery pada shape producer (wav_paths: []) → WAV hasil glob tetap
+    dipindah ke discarded/, session file dihapus."""
+    from meeting import paths
+    wav = orphan_session_as_written(meeting_home)
+
+    job = recover.offer_recovery(ui_confirm=lambda msg: False)
+
+    assert job is None
+    assert (paths.tmp_dir() / "discarded" / wav.name).exists()
+    assert not wav.exists()
+    assert not paths.session_file().exists()
+
+
+def test_recovery_finalize_failure_discards_and_unlinks(meeting_home, monkeypatch):
+    """Finalize melempar (WAV korup) → tidak raise/wedge: WAV selamat ke
+    discarded/ (tidak dihapus), session file dihapus."""
+    from meeting import paths
+    wav = orphan_session_as_written(meeting_home)
+
+    def boom(wavs, out_stem):
+        raise RuntimeError("disk penuh saat FLAC")
+
+    monkeypatch.setattr(recover.finalizer, "finalize", boom)
+    job = recover.offer_recovery(ui_confirm=lambda msg: True)
+
+    assert job is None
+    assert (paths.tmp_dir() / "discarded" / wav.name).exists()
+    assert not wav.exists()
+    assert not paths.session_file().exists()
+    assert list(paths.queue_dir("pending").glob("*.json")) == []
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -2595,17 +2685,23 @@ Expected: FAIL — `ImportError`
 
 ```python
 """Deteksi & pemulihan sesi yatim (crash/force-quit): WAV utuh → tawarkan finalisasi
-atau simpan ke discarded/ (tidak pernah hapus diam-diam)."""
+atau simpan ke discarded/ (tidak pernah hapus diam-diam).
+
+WAV kandidat TIDAK diambil dari meta["wav_paths"] saja — producer (cli.cmd_record,
+button) selalu menulis `wav_paths: []` karena file session tidak pernah di-update
+selama rekaman. Kandidat diglob dari tmp/ (id_mic/id_sys) lalu di-union dgn
+wav_paths agar shape lama tetap jalan. Jalur confirmed failure-safe: gagal pun
+session file dihapus & WAV dipindah ke discarded/ — tool tidak pernah wedged."""
 from __future__ import annotations
 
-import json
 import shutil
+from pathlib import Path
 
 from . import finalizer, indexmd, paths, queuer, session
 
 
 def find_orphans() -> list[dict]:
-    """Sesi yatim = session file dgn PID mati. WAV dicocokkan dari session file."""
+    """Sesi yatim = session file dgn PID mati. WAV dicocokkan saat recovery."""
     orphan = session.orphaned()
     if orphan:
         return [orphan]
@@ -2617,7 +2713,8 @@ def offer_recovery(ui_confirm) -> dict | None:
     if not orphans:
         return None
     meta = orphans[0]
-    dur = _frames(meta) / 16000  # hitung SEBELUM finalize — finalize menghapus WAV
+    cands = _wav_paths(meta)
+    dur = _frames(cands) / 16000  # hitung SEBELUM finalize — finalize menghapus WAV
     durasi = indexmd.fmt_duration(dur)
     msg = (
         f"Ditemukan rekaman yatim dari sesi yang tidak selesai (id {meta['id']}, "
@@ -2626,59 +2723,89 @@ def offer_recovery(ui_confirm) -> dict | None:
     )
     if not ui_confirm(msg):
         # tolak → pindahkan ke discarded/, JANGAN hapus
-        disc = paths.tmp_dir() / "discarded"
-        disc.mkdir(parents=True, exist_ok=True)
-        for w in _wav_paths(meta):
-            if w.exists():
-                shutil.move(str(w), disc / w.name)
+        _discard(cands)
         paths.session_file().unlink(missing_ok=True)
         return None
 
-    wavs = [w for w in _wav_paths(meta) if w.exists()]
-    flac = finalizer.finalize(wavs, meta["id"])
-    job = {
-        "id": meta["id"],
-        "created_at": meta.get("started_at") or "unknown",
-        "source": meta.get("source", "mic"),
-        "audio": str(flac.relative_to(paths.home() / "data")),
-        "wav": None,
-        "original_path": None,
-        "needs_finalization": False,
-        "duration_sec": dur,
-        "device": meta.get("device"),
-        "model": _current_model(),
-        "status": "pending",
-    }
-    queuer.enqueue(job)
-    indexmd.upsert(
-        {
-            "id": job["id"],
-            "tanggal": (job["created_at"] or "").replace("T", " "),
-            "durasi": indexmd.fmt_duration(job["duration_sec"]),
+    wavs = [w for w in cands if w.exists()]
+    try:
+        if not wavs:
+            raise finalizer.FinalizeError("tidak ada WAV input")
+        flac = finalizer.finalize(wavs, meta["id"])
+        job = {
+            "id": meta["id"],
+            "created_at": meta.get("started_at") or "unknown",
+            "source": meta.get("source", "mic"),
+            "audio": str(flac.relative_to(paths.home() / "data")),
+            "wav": None,
+            "original_path": None,
+            "needs_finalization": False,
+            "duration_sec": dur,
+            "device": meta.get("device"),
+            "model": _current_model(),
             "status": "pending",
-            "path": f"data/output/{job['id']}/transcript.md",
         }
-    )
+        queuer.enqueue(job)
+        indexmd.upsert(
+            {
+                "id": job["id"],
+                "tanggal": (job["created_at"] or "").replace("T", " "),
+                "durasi": indexmd.fmt_duration(job["duration_sec"]),
+                "status": "pending",
+                "path": f"data/output/{job['id']}/transcript.md",
+            }
+        )
+    except Exception as e:
+        # gagal finalize/enqueue → JANGAN wedge: selamatkan WAV ke discarded/
+        # (tidak pernah hapus), hapus session file, laporkan via return None.
+        _discard([w for w in cands if w.exists()])
+        paths.session_file().unlink(missing_ok=True)
+        print(f"gagal memulihkan sesi yatim {meta['id']}: {e}", file=_stderr())
+        return None
     paths.session_file().unlink(missing_ok=True)
     queuer.spawn_worker()
     return job
 
 
-def _wav_paths(meta: dict) -> list:
-    from pathlib import Path as _P
+def _stderr():
+    import sys
 
-    out = []
-    for w in meta.get("wav_paths", []):
-        p = _P(w)
-        out.append(p if p.is_absolute() else paths.home() / "data" / w)
+    return sys.stderr
+
+
+def _discard(cands: list[Path]) -> None:
+    """Pindahkan WAV kandidat ke tmp/discarded/ — tidak pernah hapus."""
+    disc = paths.tmp_dir() / "discarded"
+    disc.mkdir(parents=True, exist_ok=True)
+    for w in cands:
+        if w.exists():
+            shutil.move(str(w), disc / w.name)
+
+
+def _wav_paths(meta: dict) -> list[Path]:
+    """Union: glob tmp/<id>_mic.wav & tmp/<id>_sys.wav + wav_paths dari session
+    file (relatif diresolve thd home()/data/). Producer menulis `wav_paths: []`
+    saat start dan tidak pernah meng-update file — glob adalah sumber utama."""
+    out: list[Path] = []
+    tmp = paths.tmp_dir()
+    jid = str(meta.get("id", ""))
+    for name in (f"{jid}_mic.wav", f"{jid}_sys.wav"):
+        p = tmp / name
+        if p.exists():
+            out.append(p)
+    for w in meta.get("wav_paths", []) or []:
+        p = Path(w)
+        p = p if p.is_absolute() else paths.home() / "data" / w
+        if p not in out:
+            out.append(p)
     return out
 
 
-def _frames(meta: dict) -> int:
+def _frames(cands: list[Path]) -> int:
     import soundfile as sf
 
     total = 0
-    for w in _wav_paths(meta):
+    for w in cands:
         if w.exists():
             try:
                 total = max(total, sf.info(w).frames)

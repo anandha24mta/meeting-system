@@ -29,6 +29,24 @@ def orphan_session(meeting_home, pid=999999):
     return wav
 
 
+def orphan_session_as_written(meeting_home, pid=999999):
+    """Session file PERSIS seperti cli.cmd_record / button tulis saat start:
+    `wav_paths: []` (file session tidak pernah di-update saat merekam), PID mati,
+    WAV incremental nyata sudah ada di tmp/."""
+    from meeting import paths
+    paths.ensure_dirs()
+    wav = write_wav(paths.tmp_dir() / "2026-08-28_0900_mic.wav")
+    paths.session_file().write_text(
+        json.dumps({
+            "pid": pid, "id": "2026-08-28_0900", "source": "mic",
+            "started_at": "2026-08-28T09:00:00", "device": "mic default",
+            "wav_paths": [],
+        }),
+        encoding="utf-8",
+    )
+    return wav
+
+
 def test_find_orphans_detects_yatim(meeting_home):
     orphan_session(meeting_home)
     orphans = recover.find_orphans()
@@ -70,3 +88,77 @@ def test_offer_recovery_declined_moves_to_discarded(meeting_home):
 
 def test_offer_recovery_no_orphan_returns_none(meeting_home):
     assert recover.offer_recovery(ui_confirm=lambda msg: True) is None
+
+
+# ---- regresi Critical-1: shape session persis yang ditulis producer ----
+
+def test_recovery_from_empty_wav_paths_globs_tmp(meeting_home, monkeypatch):
+    """Sesi yatim PERSIS seperti cmd_record menulisnya (wav_paths: [], PID mati,
+    WAV nyata di tmp/) → recovery harus tetap finalisasi & enqueue (via glob)."""
+    from meeting import paths, queuer
+    wav = orphan_session_as_written(meeting_home)
+    monkeypatch.setattr(queuer, "spawn_worker", lambda: None)
+
+    job = recover.offer_recovery(ui_confirm=lambda msg: True)
+
+    assert job is not None and job["id"] == "2026-08-28_0900"
+    assert job["duration_sec"] == pytest.approx(0.3)
+    assert (paths.recordings_dir() / "2026-08-28_0900.flac").exists()
+    assert len(list(paths.queue_dir("pending").glob("*.json"))) == 1
+    assert not paths.session_file().exists()  # tidak wedged — session dibersihkan
+    assert not wav.exists()  # WAV dimakan finalize (FLAC tersimpan)
+
+
+def test_recovery_no_wavs_anywhere_returns_none_no_raise(meeting_home):
+    """Sesi yatim tanpa WAV di mana pun (wav_paths kosong, tmp/ kosong) →
+    offer_recovery TIDAK boleh raise; session file dihapus; return None."""
+    from meeting import paths
+    paths.ensure_dirs()
+    paths.session_file().write_text(
+        json.dumps({
+            "pid": 999999, "id": "2026-08-28_0900", "source": "mic",
+            "started_at": "2026-08-28T09:00:00", "device": "mic default",
+            "wav_paths": [],
+        }),
+        encoding="utf-8",
+    )
+
+    job = recover.offer_recovery(ui_confirm=lambda msg: True)
+
+    assert job is None
+    assert not paths.session_file().exists()
+    assert list(paths.tmp_dir().glob("*.wav")) == []
+    assert not (paths.recordings_dir() / "2026-08-28_0900.flac").exists()
+
+
+def test_recovery_declined_with_empty_wav_paths_moves_globs(meeting_home):
+    """Tolak recovery pada shape producer (wav_paths: []) → WAV hasil glob tetap
+    dipindah ke discarded/, session file dihapus."""
+    from meeting import paths
+    wav = orphan_session_as_written(meeting_home)
+
+    job = recover.offer_recovery(ui_confirm=lambda msg: False)
+
+    assert job is None
+    assert (paths.tmp_dir() / "discarded" / wav.name).exists()
+    assert not wav.exists()
+    assert not paths.session_file().exists()
+
+
+def test_recovery_finalize_failure_discards_and_unlinks(meeting_home, monkeypatch):
+    """Finalize melempar (WAV korup) → tidak raise/wedge: WAV selamat ke
+    discarded/ (tidak dihapus), session file dihapus."""
+    from meeting import paths
+    wav = orphan_session_as_written(meeting_home)
+
+    def boom(wavs, out_stem):
+        raise RuntimeError("disk penuh saat FLAC")
+
+    monkeypatch.setattr(recover.finalizer, "finalize", boom)
+    job = recover.offer_recovery(ui_confirm=lambda msg: True)
+
+    assert job is None
+    assert (paths.tmp_dir() / "discarded" / wav.name).exists()
+    assert not wav.exists()
+    assert not paths.session_file().exists()
+    assert list(paths.queue_dir("pending").glob("*.json")) == []
