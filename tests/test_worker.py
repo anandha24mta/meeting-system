@@ -233,3 +233,40 @@ def test_fatal_api_key_error_writes_last_error(meeting_home, flac, monkeypatch):
         worker.run_once()
     err = (paths.home() / "data" / "worker.last_error").read_text(encoding="utf-8")
     assert "API key invalid" in err
+
+
+def test_reclaim_processing_renames_leftovers(meeting_home):
+    """Worker mati di tengah job meninggalkan .processing → sweep mengembalikan
+    ke .json agar diproses lagi (bukan pending selamanya)."""
+    from meeting import paths
+    paths.ensure_dirs()
+    left = paths.queue_dir("pending") / "j1.json.processing"
+    left.write_text(json.dumps(make_job(id="j1")), encoding="utf-8")
+
+    n = worker.reclaim_processing()
+
+    assert n == 1
+    assert not left.exists()
+    assert (paths.queue_dir("pending") / "j1.json").exists()
+
+
+def test_reclaim_processing_noop_when_clean(meeting_home):
+    from meeting import paths
+    paths.ensure_dirs()
+    assert worker.reclaim_processing() == 0
+
+
+def test_main_clears_last_error_on_success(meeting_home, flac, monkeypatch):
+    """main() sukses (antrian habis) → worker.last_error dihapus: `meeting
+    status` tak melaporkan 'API key invalid' lama setelah key diperbaiki."""
+    from meeting import paths
+    paths.ensure_dirs()
+    queuer.enqueue(make_job())
+    (paths.home() / "data" / "worker.last_error").write_text(
+        "API key invalid", encoding="utf-8"
+    )
+    monkeypatch.setattr(worker, "transcribe_audio", FakeTranscriber())
+
+    assert worker.main() == 0
+    assert not (paths.home() / "data" / "worker.last_error").exists()
+    assert list(paths.queue_dir("done").glob("*.json"))  # job memang diproses

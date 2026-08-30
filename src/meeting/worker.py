@@ -192,6 +192,21 @@ def _oldest_pending() -> Path | None:
     return pend[0] if pend else None
 
 
+def reclaim_processing() -> int:
+    """Kembalikan sisa *.json.processing ke *.json.
+
+    Worker yang mati di tengah job (PC shutdown saat backoff 429) meninggalkan
+    file .processing yang tak pernah diproses lagi & terhitung pending selamanya.
+    Aman dipanggil hanya saat lock dipegang — pemegang lock sebelumnya pasti
+    sudah mati (lock dilepas via unlink saat exit normal; stale diambil alih)."""
+    n = 0
+    for f in paths.queue_dir("pending").glob("*.processing"):
+        os.replace(f, f.with_name(f.name[: -len(".processing")]))
+        _log("info", f"reclaim {f.name} → pending (sisa worker mati)")
+        n += 1
+    return n
+
+
 def run_once() -> bool:
     """Proses satu job. Return False bila antrian kosong."""
     src = _oldest_pending()
@@ -209,6 +224,7 @@ def run_once() -> bool:
     except Exception as e:
         _log("error", f"job {src.stem} error tak terduga: {e}")
         os.replace(processing, src)  # job kembali ke pending utk run berikutnya
+        time.sleep(1.0)  # jangan tight-loop: error persisten ≠ spin CPU/log tanpa batas
     return True
 
 
@@ -218,8 +234,12 @@ def main() -> int:
         _log("info", "worker lain sudah aktif — exit")
         return 0
     try:
+        reclaim_processing()  # sisa worker mati → pending lagi (lock = pemilik lama pasti mati)
         while run_once():
             pass
+        # sukses total: hapus error lama agar `meeting status` tak melaporkan
+        # "API key invalid" selamanya setelah key diperbaiki
+        (paths.home() / "data" / "worker.last_error").unlink(missing_ok=True)
     except FatalWorkerError as e:
         _log("error", f"worker exit fatal: {e}")  # last_error sudah ditulis process()
         return 1
