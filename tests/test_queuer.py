@@ -39,6 +39,26 @@ def test_enqueue_atomic_no_tmp_left(meeting_home):
     assert leftovers == []
 
 
+def test_enqueue_same_minute_collision_suffixed(meeting_home):
+    """Dua job di menit yang sama tidak boleh saling menimpa: nama file AND
+    field id keduanya disuffix (-2, -3, …) agar JSON/nama file sepakat."""
+    from meeting import paths
+    paths.ensure_dirs()
+    p1 = queuer.enqueue(make_job())
+    p2 = queuer.enqueue(make_job())
+    p3 = queuer.enqueue(make_job())
+
+    assert p1.name == "2026-08-29_1400-standup.json"
+    assert p2.name == "2026-08-29_1400-standup-2.json"
+    assert p3.name == "2026-08-29_1400-standup-3.json"
+    # id di dalam JSON ikut disuffix — bukan hanya nama file
+    assert json.loads(p2.read_text(encoding="utf-8"))["id"] == "2026-08-29_1400-standup-2"
+    assert json.loads(p3.read_text(encoding="utf-8"))["id"] == "2026-08-29_1400-standup-3"
+    # job pertama tidak tertimpa
+    first = json.loads(p1.read_text(encoding="utf-8"))
+    assert first["id"] == "2026-08-29_1400-standup"
+
+
 def test_enqueue_rejects_bad_id(meeting_home):
     paths_ = queuer.paths
     paths_.ensure_dirs()

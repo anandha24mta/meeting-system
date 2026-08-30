@@ -20,11 +20,22 @@ def is_valid_id(s: str) -> bool:
 
 
 def enqueue(job: dict) -> Path:
-    """Tulis job JSON atomik ke pending/. ID menjadi nama file."""
+    """Tulis job JSON atomik ke pending/. ID menjadi nama file.
+
+    Dua job di menit yang sama (stop A, langsung record B) akan beradu nama —
+    os.replace diam-diam menimpa A dan WAV-nya terdampar. Bila dest sudah ada,
+    append -2, -3, … ke nama pertama yang kosong; field id job ikut disuffix
+    agar JSON dan nama file selalu sepakat."""
     if not is_valid_id(job.get("id", "")):
         raise ValueError(f"id job ilegal: {job.get('id')!r} (hanya [A-Za-z0-9_-])")
     paths.ensure_dirs()
-    dest = paths.queue_dir("pending") / f"{job['id']}.json"
+    stem = job["id"]
+    n = 2
+    while (paths.queue_dir("pending") / f"{stem}.json").exists():
+        stem = f"{job['id']}-{n}"
+        n += 1
+    job = dict(job, id=stem)
+    dest = paths.queue_dir("pending") / f"{stem}.json"
     fd, tmp = tempfile.mkstemp(dir=dest.parent, suffix=".json.tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
