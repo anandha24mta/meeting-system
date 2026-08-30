@@ -2891,7 +2891,6 @@ def fake_record(monkeypatch):
 
 def test_record_default_uses_config_source(meeting_home, fake_record, monkeypatch, capsys):
     monkeypatch.setattr(cli.queuer, "spawn_worker", lambda: None)
-    monkeypatch.setattr(cli.time, "strftime", lambda fmt: "2026-08-29T14:00:00")
     rc = cli.main(["record"])
     assert rc == 0
     job_files = list(paths.queue_dir("pending").glob("*.json"))
@@ -2927,7 +2926,7 @@ def test_record_enqueue_after_stop(meeting_home, fake_record, monkeypatch):
     job = json.loads(list(paths.queue_dir("pending").glob("*.json"))[0].read_text(encoding="utf-8"))
     assert job["id"].endswith("standup")
     assert job["needs_finalization"] is True
-    assert job["wav"] == str(paths.tmp_dir() / f"{job['id']}_mic.wav").replace(str(paths.home() / "data") + "/", "tmp/")
+    assert job["wav"] == str(paths.tmp_dir() / f"{job['id']}_mic.wav").replace(str(paths.home() / "data") + "/", "")
     assert not paths.session_file().exists()  # session dibersihkan
     from meeting import indexmd
     assert indexmd.rows()[0]["status"] == "pending"
