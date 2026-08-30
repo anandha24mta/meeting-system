@@ -3483,11 +3483,16 @@ class FloatingButton:
         self.canvas = tk.Canvas(self.root, width=SIZE, height=SIZE, bg=BG,
                                 highlightthickness=0)
         self.canvas.pack()
-        self.canvas.bind("<Button-1>", self._on_click)
+        # NB: <Button-1> dan <ButtonPress-1> adalah sinonim Tk — jangan bind dua-duanya.
+        # Klik dideteksi di <ButtonRelease-1> dengan threshold drag: tekan-tahan
+        # tanpa gerak >= threshold = klik; gerak = drag.
+        self._press_pos = (0, 0)
         self._drag_offset = (0, 0)
+        self._dragged = False
         self.canvas.bind("<ButtonPress-1>", self._on_press)
         self.canvas.bind("<B1-Motion>", self._on_drag)
-        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.canvas.bind("<ButtonRelease-1>", self._on_release)
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)  # praktis tak terpanggil utk overrideredirect; posisi disimpan saat drag
 
         self._pulse_t = 0.0
         self._tick()
@@ -3495,22 +3500,40 @@ class FloatingButton:
     # ---------- interaksi ----------
 
     def _on_press(self, ev):
-        self._drag_offset = (ev.x - SIZE // 2, ev.y - SIZE // 2)
+        self._press_pos = (self.root.winfo_pointerx(), self.root.winfo_pointery())
+        self._drag_offset = (ev.x, ev.y)  # offset dari pojok jendela — drag tanpa lompat
+        self._dragged = False
 
     def _on_drag(self, ev):
+        if not self._dragged:
+            px, py = self._press_pos
+            if abs(self.root.winfo_pointerx() - px) + abs(self.root.winfo_pointery() - py) < 5:
+                return  # belum lewat threshold — belum dianggap drag
+            self._dragged = True
         dx, dy = self._drag_offset
         x = self.root.winfo_pointerx() - dx
         y = self.root.winfo_pointery() - dy
         self.root.geometry(f"+{x}+{y}")
 
+    def _on_release(self, ev):
+        if self._dragged:
+            # simpan posisi setiap selesai drag — jendela overrideredirect tidak
+            # menerima WM_DELETE_WINDOW, jadi tidak ada momen "close" yang bisa dipakai
+            config.update(button_x=self.root.winfo_x(), button_y=self.root.winfo_y())
+            return
+        # tekan-tanpa-drag = klik
+        if self.state.phase == "idle":
+            self._start_recording()
+        elif self.state.phase == "recording":
+            self._stop_recording()
+
     def _on_close(self):
-        # simpan posisi
         config.update(button_x=self.root.winfo_x(), button_y=self.root.winfo_y())
         if self.state.phase == "recording":
             session.request_stop()  # recorder proses lain menulis WAV tetap
         self.root.destroy()
 
-    def _on_click(self, ev):
+    def _on_click(self, ev):  # dipertahankan utk kompatibilitas pemanggilan manual/test
         if self.state.phase == "idle":
             self._start_recording()
         elif self.state.phase == "recording":
@@ -3539,8 +3562,16 @@ class FloatingButton:
         self.rec_thread.start()
 
     def _record_worker(self, source, job_id, cfg):
-        self.rec_meta = recorder.record(source, job_id, mic_device=cfg.get("mic_device"))
-        self.root.after(0, self._after_record_stopped)
+        try:
+            self.rec_meta = recorder.record(source, job_id, mic_device=cfg.get("mic_device"))
+        except Exception:
+            # device gagal total (RecorderError, import, disk) — jangan biarkan
+            # tombol wedged merah selamanya; route ke jalur buang yang sama
+            self.rec_meta = {"duration_sec": 0, "wav_paths": [], "device": "error", "device_lost": True}
+        try:
+            self.root.after(0, self._after_record_stopped)
+        except Exception:
+            pass  # root sudah di-destroy — sesi yatim ditangani recovery saat klik berikutnya
 
     def _stop_recording(self):
         session.request_stop()
