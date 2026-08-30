@@ -27,3 +27,5 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-m 'not integration'"
+markers = ["integration: butuh hardware Windows + API key (jalankan manual)"]
