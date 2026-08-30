@@ -132,18 +132,18 @@ def record(source: str, job_id: str, mic_device: str | None = None) -> dict:
     elif source == "both":
         wav_m = tmp / f"{job_id}_mic.wav"
         wav_s = tmp / f"{job_id}_sys.wav"
-        errs: list[_Stop] = []
+        errs: list[Exception] = []
 
         def run_mic():
             try:
                 _record_mic(job_id, wav_m, mic_device)
-            except _Stop as e:
+            except Exception as e:  # _Stop, disk-full, import gagal — semua berhenti rapi
                 errs.append(e)
 
         def run_sys():
             try:
                 _record_sys(job_id, wav_s)
-            except _Stop as e:
+            except Exception as e:
                 errs.append(e)
 
         tm = threading.Thread(target=run_mic)
