@@ -2454,7 +2454,7 @@ def record(source: str, job_id: str, mic_device: str | None = None) -> dict:
         tm = threading.Thread(target=run_mic)
         ts = threading.Thread(target=run_sys)
         tm.start(); ts.start()
-        while (tm.is_alive() or ts.is_alive()) and not session.stop_requested():
+        while (tm.is_alive() or ts.is_alive()) and not session.stop_requested() and not errs:
             time.sleep(0.2)
         if errs:
             lost = True
