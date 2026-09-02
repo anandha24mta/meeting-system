@@ -46,8 +46,10 @@ class FakeModels:
     def __init__(self, files, fail_generate=False):
         self.files = files
         self.fail_generate = fail_generate
+        self.calls = 0
 
     def generate_content(self, *, model, contents):
+        self.calls += 1
         if self.fail_generate:
             r = FakeResponse(None)
             # emulasi SDK: response.text raise bila tidak ada parts
@@ -192,3 +194,103 @@ def test_transcribe_no_override_when_ffprobe_missing(meeting_home, tmp_path, mon
     client = FakeClient()
     transcribe.transcribe_audio(audio, make_job(), client=client)
     assert client.files.upload_configs[0] is None
+
+
+# --- chunking: audio panjang dipecah jadi beberapa bagian ---------------------
+
+def test_chunk_offsets_splits_evenly():
+    offsets = transcribe._chunk_offsets(2700.0)  # 45 menit → 3 x 15 menit
+    assert len(offsets) == 3
+    assert [round(o[0]) for o in offsets] == [0, 900, 1800]
+    assert all(round(o[1]) == 900 for o in offsets)
+
+
+def test_chunk_offsets_uneven_duration_still_equal_pieces():
+    offsets = transcribe._chunk_offsets(1201.0)  # sedikit di atas 20 menit → 2 bagian
+    assert len(offsets) == 2
+    assert offsets[0][1] == pytest.approx(600.5)
+    assert offsets[1][1] == pytest.approx(600.5)
+
+
+def test_prepare_chunks_below_threshold_returns_single(meeting_home, audio):
+    from meeting import paths
+    paths.ensure_dirs()
+    chunks = transcribe._prepare_chunks(audio, "job1")
+    assert chunks == [(audio, 0.0)]
+
+
+def test_probe_duration_reads_flac_via_soundfile(meeting_home, audio):
+    dur = transcribe._probe_duration(audio)
+    assert dur == pytest.approx(0.5, abs=0.01)  # fixture: 8000 frame @ 16kHz
+
+
+def test_split_soundfile_produces_correct_frame_ranges(meeting_home, audio, tmp_path):
+    """audio fixture: 0.5 s @ 16kHz = 8000 frame. Pecah jadi 2 bagian 0.25 s masing2."""
+    import soundfile as sf
+    from meeting import paths
+    paths.ensure_dirs()
+
+    offsets = [(0.0, 0.25), (0.25, 0.25)]
+    chunks = transcribe._split_soundfile(audio, offsets, "job1")
+    assert len(chunks) == 2
+    for c in chunks:
+        assert sf.info(str(c)).frames == 4000
+
+
+def test_split_ffmpeg_raises_clear_error_when_missing(meeting_home, tmp_path, monkeypatch):
+    monkeypatch.setattr(transcribe.shutil, "which", lambda name: None)
+    with pytest.raises(transcribe.TranscribeError, match="ffmpeg"):
+        transcribe._split_ffmpeg(tmp_path / "x.mp4", [(0.0, 10.0)], "job1")
+
+
+def test_transcribe_splits_long_audio_and_concatenates_with_markers(
+    meeting_home, audio, monkeypatch
+):
+    """Simulasikan audio panjang: _prepare_chunks dipatch langsung ke 2 potongan
+    (mekanisme split sungguhan sudah diuji terpisah) — fokus di sini: orkestrasi
+    upload/generate per potongan + gabungan hasil dengan penanda bagian."""
+    from meeting import paths
+    paths.ensure_dirs()
+
+    chunk_a = paths.tmp_dir() / "chunk_a.flac"
+    chunk_b = paths.tmp_dir() / "chunk_b.flac"
+    chunk_a.write_bytes(b"a")
+    chunk_b.write_bytes(b"b")
+    monkeypatch.setattr(
+        transcribe, "_prepare_chunks", lambda p, jid: [(chunk_a, 0.0), (chunk_b, 900.0)]
+    )
+
+    client = FakeClient(text="Halo, ini transkrip.")
+    meta = transcribe.transcribe_audio(audio, make_job(), client=client)
+
+    assert client.files.uploaded == [str(chunk_a), str(chunk_b)]
+    assert client.models.calls == 2
+    assert meta["status"] == "done"
+
+    md = (paths.output_dir() / meta["id"] / "transcript.md").read_text(encoding="utf-8")
+    assert "--- Bagian 1 (mulai ≈ 0:00) ---" in md
+    assert "--- Bagian 2 (mulai ≈ 15:00) ---" in md
+    assert md.count("Halo, ini transkrip.") == 2
+    # potongan lokal dibersihkan setelah selesai
+    assert not chunk_a.exists()
+    assert not chunk_b.exists()
+
+
+def test_transcribe_chunk_local_cleanup_even_on_failure(meeting_home, audio, monkeypatch):
+    from meeting import paths
+    paths.ensure_dirs()
+
+    chunk_a = paths.tmp_dir() / "chunk_a.flac"
+    chunk_b = paths.tmp_dir() / "chunk_b.flac"
+    chunk_a.write_bytes(b"a")
+    chunk_b.write_bytes(b"b")
+    monkeypatch.setattr(
+        transcribe, "_prepare_chunks", lambda p, jid: [(chunk_a, 0.0), (chunk_b, 900.0)]
+    )
+
+    client = FakeClient(fail_generate=True)
+    with pytest.raises(transcribe.TranscribeError):
+        transcribe.transcribe_audio(audio, make_job(), client=client)
+
+    assert not chunk_a.exists()
+    assert not chunk_b.exists()

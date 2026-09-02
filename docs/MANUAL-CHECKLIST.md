@@ -39,6 +39,8 @@ GEMINI_API_KEY valid). Centang setiap item.
 - [ ] `meeting transcribe Zoom.mp4` → job langsung (tanpa ffmpeg)
 - [ ] File format eksotis tanpa ffmpeg → pesan install satu kalimat
 - [ ] (Opsional, ffmpeg terpasang) format eksotis dikonversi otomatis
+- [ ] Meeting panjang (>20 menit) → transcript.md lengkap sampai akhir,
+      ada penanda "--- Bagian N (mulai ≈ ...) ---" per potongan
 
 ## Worker
 

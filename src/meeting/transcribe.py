@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import shutil
 import subprocess
 import time
@@ -25,6 +26,16 @@ TRANSCRIPT_PROMPT = (
 
 POLL_INTERVAL_SEC = 2.0
 POLL_TIMEOUT_SEC = 600.0
+
+# Verbatim generate_content untuk audio sangat panjang tidak reliable dalam satu
+# panggilan — model kadang finish_reason=STOP jauh sebelum audio benar-benar habis
+# (dikonfirmasi manual: file 74 menit yang sama, sekali berhenti di menit 8, sekali
+# tuntas). Di atas threshold ini, audio dipecah jadi beberapa bagian dan
+# ditranskripsi terpisah lalu digabung.
+CHUNK_THRESHOLD_SEC = 20 * 60
+CHUNK_TARGET_SEC = 15 * 60
+
+_SOUNDFILE_EXTS = {".flac", ".wav"}
 
 
 class TranscribeError(RuntimeError):
@@ -87,16 +98,92 @@ def _response_text(resp) -> str:
         return ""
 
 
-def transcribe_audio(audio_path: Path, job: dict, client=None) -> dict:
-    if client is None:
-        client = _make_client()
+def _probe_duration(audio_path: Path) -> float | None:
+    """Durasi dalam detik. soundfile dulu (murah, tanpa subprocess) utk FLAC/WAV
+    yang kita sendiri hasilkan; ffprobe (opsional) sbg fallback utk format lain."""
+    if audio_path.suffix.lower() in _SOUNDFILE_EXTS:
+        try:
+            import soundfile as sf
+            info = sf.info(str(audio_path))
+            return info.frames / info.samplerate
+        except Exception:
+            pass
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return None
+    try:
+        out = subprocess.run(
+            [ffprobe, "-v", "error", "-show_entries", "format=duration",
+             "-of", "csv=p=0", str(audio_path)],
+            capture_output=True, text=True, timeout=30,
+        )
+        return float(out.stdout.strip())
+    except Exception:
+        return None
 
-    from . import indexmd as _idx  # durasi utk header
-    dur = job.get("duration_sec")
-    durasi = _idx.fmt_duration(dur) if dur else "-"
 
-    mime_type = _audio_mime_override(audio_path)
-    upload_kwargs = {"file": str(audio_path)}
+def _chunk_offsets(duration: float) -> list[tuple[float, float]]:
+    """[(mulai_detik, panjang_detik), ...] — n potongan sama panjang (≤ CHUNK_TARGET_SEC)
+    menutupi seluruh `duration`."""
+    n = math.ceil(duration / CHUNK_TARGET_SEC)
+    size = duration / n
+    return [(i * size, size) for i in range(n)]
+
+
+def _split_soundfile(audio_path: Path, offsets: list[tuple[float, float]], job_id: str) -> list[Path]:
+    import soundfile as sf
+
+    sr = sf.info(str(audio_path)).samplerate
+    out_paths: list[Path] = []
+    for i, (start, length) in enumerate(offsets):
+        data, _ = sf.read(str(audio_path), start=int(start * sr), frames=int(round(length * sr)))
+        out = paths.tmp_dir() / f"{job_id}_chunk{i}.flac"
+        sf.write(str(out), data, sr, format="FLAC")
+        out_paths.append(out)
+    return out_paths
+
+
+def _split_ffmpeg(audio_path: Path, offsets: list[tuple[float, float]], job_id: str) -> list[Path]:
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise TranscribeError(
+            "Meeting ini perlu dipecah jadi beberapa bagian (durasi panjang) dan format "
+            "filenya butuh ffmpeg untuk itu — install dengan: winget install ffmpeg"
+        )
+    out_paths: list[Path] = []
+    for i, (start, length) in enumerate(offsets):
+        out = paths.tmp_dir() / f"{job_id}_chunk{i}.flac"
+        rc = subprocess.run(
+            [ffmpeg, "-y", "-ss", str(start), "-i", str(audio_path), "-t", str(length),
+             "-ac", "1", "-ar", "16000", str(out)],
+            capture_output=True,
+        )
+        if rc.returncode != 0 or not out.exists():
+            for p in out_paths:
+                p.unlink(missing_ok=True)
+            raise TranscribeError(f"ffmpeg gagal memecah bagian {i + 1}: {audio_path.name}")
+        out_paths.append(out)
+    return out_paths
+
+
+def _prepare_chunks(audio_path: Path, job_id: str) -> list[tuple[Path, float]]:
+    """[(path_potongan, mulai_detik), ...]. Satu elemen [(audio_path, 0.0)] bila
+    durasi tak diketahui atau di bawah CHUNK_THRESHOLD_SEC — jalur asli, tak berubah."""
+    duration = _probe_duration(audio_path)
+    if duration is None or duration <= CHUNK_THRESHOLD_SEC:
+        return [(audio_path, 0.0)]
+    offsets = _chunk_offsets(duration)
+    paths.tmp_dir().mkdir(parents=True, exist_ok=True)
+    if audio_path.suffix.lower() in _SOUNDFILE_EXTS:
+        chunk_paths = _split_soundfile(audio_path, offsets, job_id)
+    else:
+        chunk_paths = _split_ffmpeg(audio_path, offsets, job_id)
+    return [(cp, start) for cp, (start, _length) in zip(chunk_paths, offsets)]
+
+
+def _transcribe_chunk(client, model: str, chunk_path: Path) -> str:
+    mime_type = _audio_mime_override(chunk_path)
+    upload_kwargs = {"file": str(chunk_path)}
     if mime_type:
         upload_kwargs["config"] = {"mime_type": mime_type}
     uploaded = client.files.upload(**upload_kwargs)
@@ -104,7 +191,7 @@ def transcribe_audio(audio_path: Path, job: dict, client=None) -> dict:
         _wait_active(client, uploaded)
         try:
             resp = client.models.generate_content(
-                model=job["model"], contents=[TRANSCRIPT_PROMPT, uploaded]
+                model=model, contents=[TRANSCRIPT_PROMPT, uploaded]
             )
         except TranscribeError:
             raise
@@ -115,11 +202,37 @@ def transcribe_audio(audio_path: Path, job: dict, client=None) -> dict:
             raise TranscribeError(
                 "respons Gemini tanpa teks — job ditandai gagal, tidak ada file kosong ditulis"
             )
+        return text
     finally:
         try:
             client.files.delete(name=uploaded.name)
         except Exception:
             pass  # best-effort; file Gemini expire otomatis 48 jam
+
+
+def transcribe_audio(audio_path: Path, job: dict, client=None) -> dict:
+    if client is None:
+        client = _make_client()
+
+    from . import indexmd as _idx  # durasi utk header
+    dur = job.get("duration_sec")
+    durasi = _idx.fmt_duration(dur) if dur else "-"
+
+    chunks = _prepare_chunks(audio_path, job["id"])
+    is_split = len(chunks) > 1
+    parts: list[str] = []
+    try:
+        for i, (chunk_path, offset) in enumerate(chunks):
+            chunk_text = _transcribe_chunk(client, job["model"], chunk_path)
+            if is_split:
+                parts.append(f"--- Bagian {i + 1} (mulai ≈ {_idx.fmt_duration(offset)}) ---\n\n{chunk_text}")
+            else:
+                parts.append(chunk_text)
+    finally:
+        if is_split:
+            for chunk_path, _offset in chunks:
+                chunk_path.unlink(missing_ok=True)
+    text = "\n\n".join(parts)
 
     outdir = paths.output_dir() / job["id"]
     outdir.mkdir(parents=True, exist_ok=True)

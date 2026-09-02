@@ -29,5 +29,7 @@ Auto-start saat login (opsional): buat shortcut `meeting button` di
 
 ## Troubleshooting
 
-- `ffmpeg` dibutuhkan hanya untuk format eksotis: `winget install ffmpeg`
+- `ffmpeg` dibutuhkan untuk format eksotis, dan juga untuk memecah meeting
+  panjang (>20 menit) yang formatnya bukan WAV/FLAC: `winget install ffmpeg`
+  (meeting hasil `meeting record` selalu FLAC — tidak butuh ffmpeg untuk ini)
 - Worker log: `data/worker.log`; error terakhir: `meeting status`
