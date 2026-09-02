@@ -5,9 +5,9 @@ GEMINI_API_KEY valid). Centang setiap item.
 
 ## Rekam
 
-- [ ] `meeting record --mic` — berhenti dengan Ctrl+C; job muncul di `meeting status`;
+- [x] `meeting record --mic` — berhenti dengan Ctrl+C; job muncul di `meeting status`;
       transcript.md muncul di `data/output/<id>/` dalam beberapa menit
-- [ ] `meeting record --sys` — putar audio dari Zoom/Meet/YouTube; transkrip berisi
+- [x] `meeting record --sys` — putar audio dari Zoom/Meet/YouTube; transkrip berisi
       ucapan dari audio sistem
 - [ ] `meeting record --both` — FLAC final stereo (mic kiri, sistem kanan) — cek
       `data/recordings/<id>.flac` 2 kanal; transkrip tetap masuk akal

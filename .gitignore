@@ -1,5 +1,7 @@
 .env
 data/
+/INDEX.md
+/config.json
 __pycache__/
 *.pyc
 .pytest_cache/
