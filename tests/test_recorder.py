@@ -72,9 +72,11 @@ def test_record_sys_uses_loopback(meeting_home, monkeypatch):
                 def __exit__(self, *a):
                     pass
 
-                def __iter__(self):
+                def record(self, *, numframes):
                     t = np.linspace(0, 0.25, 4000, endpoint=False)
-                    yield (0.1 * np.sin(2 * np.pi * 300 * t)).astype(np.float32)
+                    block = (0.1 * np.sin(2 * np.pi * 300 * t)).astype(np.float32).reshape(-1, 1)
+                    session.request_stop()
+                    return block
 
             return Rec()
 
@@ -114,9 +116,11 @@ def test_record_both_writes_two_wavs_min_duration(meeting_home, monkeypatch, fak
                 def __exit__(self, *a):
                     pass
 
-                def __iter__(self):
+                def record(self, *, numframes):
                     t = np.linspace(0, 0.25, 4000, endpoint=False)
-                    yield (0.1 * np.sin(2 * np.pi * 300 * t)).astype(np.float32)
+                    block = (0.1 * np.sin(2 * np.pi * 300 * t)).astype(np.float32).reshape(-1, 1)
+                    session.request_stop()
+                    return block
 
             return Rec()
 
@@ -161,9 +165,11 @@ def test_record_both_worker_crash_sets_device_lost(meeting_home, monkeypatch, fa
                 def __exit__(self, *a):
                     pass
 
-                def __iter__(self):
+                def record(self, *, numframes):
                     t = np.linspace(0, 0.25, 4000, endpoint=False)
-                    yield (0.1 * np.sin(2 * np.pi * 300 * t)).astype(np.float32)
+                    block = (0.1 * np.sin(2 * np.pi * 300 * t)).astype(np.float32).reshape(-1, 1)
+                    session.request_stop()
+                    return block
 
             return Rec()
 

@@ -73,22 +73,23 @@ def _record_mic(job_id: str, wav: Path, mic_device: str | None) -> float:
 
 
 def _record_sys(job_id: str, wav: Path) -> float:
-    """soundcard WASAPI loopback; return durasi detik."""
+    """soundcard WASAPI loopback; return durasi detik.
+    Recorder soundcard bukan iterable — baca blok lewat record(numframes=...) yang blocking."""
     import soundcard as sc
 
+    blocksize = 8000
     spk = sc.default_speaker()
     mic = sc.get_microphone(id=str(spk.name), include_loopback=True)
     f = _writer(wav)
     n = 0
     try:
-        with mic.recorder(samplerate=SAMPLE_RATE, blocksize=8000,
+        with mic.recorder(samplerate=SAMPLE_RATE, blocksize=blocksize,
                           channels=1, exclusive_mode=False) as rec:
-            for block in rec:
+            while not session.stop_requested():
+                block = rec.record(numframes=blocksize)
                 f.write(np.asarray(block, dtype=np.float32).reshape(-1, 1))
                 f.flush()
                 n += len(block)
-                if session.stop_requested():
-                    break
     except Exception as e:  # termasuk device dicabut
         raise _Stop(f"loopback error: {e}") from e
     finally:
@@ -125,9 +126,11 @@ def record(source: str, job_id: str, mic_device: str | None = None) -> dict:
         except _Stop as e:
             lost = True
             dur = _frames_of(wav) / SAMPLE_RATE
-        import sys as _s
-        if "soundcard" in _s.modules:
-            device = f"{_s.modules['soundcard'].default_speaker().name} loopback"
+            device = str(e)
+        if not lost:
+            import sys as _s
+            if "soundcard" in _s.modules:
+                device = f"{_s.modules['soundcard'].default_speaker().name} loopback"
         wavs = [wav]
     elif source == "both":
         wav_m = tmp / f"{job_id}_mic.wav"
