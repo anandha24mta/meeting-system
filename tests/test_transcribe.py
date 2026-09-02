@@ -276,6 +276,45 @@ def test_transcribe_splits_long_audio_and_concatenates_with_markers(
     assert not chunk_b.exists()
 
 
+def _write_silence(path, seconds=1.0, sr=16000):
+    import numpy as np
+    import soundfile as sf
+    sf.write(str(path), np.zeros(int(sr * seconds), dtype="float32"), sr, format="FLAC")
+
+
+def test_is_silent_true_for_near_zero_rms(meeting_home, tmp_path):
+    p = tmp_path / "silent.flac"
+    _write_silence(p)
+    assert transcribe._is_silent(p) is True
+
+
+def test_is_silent_false_for_real_signal(meeting_home, audio):
+    assert transcribe._is_silent(audio) is False  # fixture: sine wave nyata
+
+
+def test_is_silent_false_for_unreadable_extension(meeting_home, tmp_path):
+    p = tmp_path / "x.mp4"
+    p.write_bytes(b"not real audio")
+    assert transcribe._is_silent(p) is False  # tak dicek, lolos apa adanya
+
+
+def test_transcribe_fails_clearly_on_silent_audio_without_calling_gemini(
+    meeting_home, tmp_path
+):
+    """Gemini terbukti mengarang transkrip meyakinkan dari audio hening total
+    (halusinasi, dikonfirmasi manual) — job harus gagal SEBELUM upload, bukan
+    dapat transkrip palsu berstatus done."""
+    from meeting import paths
+    paths.ensure_dirs()
+    silent = paths.recordings_dir() / "silent.flac"
+    _write_silence(silent)
+
+    client = FakeClient(text="Halo, ini seharusnya tidak pernah muncul.")
+    with pytest.raises(transcribe.TranscribeError, match="hening"):
+        transcribe.transcribe_audio(silent, make_job(), client=client)
+    assert client.files.uploaded == []  # tidak pernah upload sama sekali
+
+
 def test_transcribe_chunk_local_cleanup_even_on_failure(meeting_home, audio, monkeypatch):
     from meeting import paths
     paths.ensure_dirs()

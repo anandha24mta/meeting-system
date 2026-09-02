@@ -37,6 +37,13 @@ CHUNK_TARGET_SEC = 15 * 60
 
 _SOUNDFILE_EXTS = {".flac", ".wav"}
 
+# Audio nyaris hening total tetap menghasilkan transkrip meyakinkan dari Gemini
+# alih-alih "[tidak jelas]" — dikonfirmasi manual: RMS ~0.00003 (~-90 dBFS)
+# menghasilkan kalimat pembuka rapat yang sepenuhnya fiktif. Threshold ini jauh
+# di bawah ucapan nyata (biasanya > -40 dBFS) jadi tak berisiko salah tolak audio
+# pelan yang masih ada isinya.
+SILENCE_RMS_THRESHOLD = 0.001
+
 
 class TranscribeError(RuntimeError):
     pass
@@ -181,7 +188,29 @@ def _prepare_chunks(audio_path: Path, job_id: str) -> list[tuple[Path, float]]:
     return [(cp, start) for cp, (start, _length) in zip(chunk_paths, offsets)]
 
 
+def _is_silent(audio_path: Path) -> bool:
+    """True bila audio (yg soundfile bisa baca) nyaris hening total sepanjang
+    durasinya. File yg soundfile tak bisa baca (mp4/mp3 mentah dll) tidak dicek —
+    lolos ke Gemini seperti biasa (lihat SILENCE_RMS_THRESHOLD)."""
+    if audio_path.suffix.lower() not in _SOUNDFILE_EXTS:
+        return False
+    try:
+        import numpy as np
+        import soundfile as sf
+        data, _sr = sf.read(str(audio_path), dtype="float32", always_2d=False)
+        if data.size == 0:
+            return True
+        return float(np.sqrt(np.mean(np.square(data)))) < SILENCE_RMS_THRESHOLD
+    except Exception:
+        return False
+
+
 def _transcribe_chunk(client, model: str, chunk_path: Path) -> str:
+    if _is_silent(chunk_path):
+        raise TranscribeError(
+            "audio nyaris hening total — tidak ada suara terdeteksi, transkripsi "
+            "dibatalkan (kemungkinan mic/sumber tidak menangkap apa pun)"
+        )
     mime_type = _audio_mime_override(chunk_path)
     upload_kwargs = {"file": str(chunk_path)}
     if mime_type:
