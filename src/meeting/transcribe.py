@@ -2,10 +2,18 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 import time
 from pathlib import Path
 
 from . import config, indexmd, paths
+
+_AUDIO_MIME = {
+    ".mp4": "audio/mp4", ".m4a": "audio/mp4", ".webm": "audio/webm",
+    ".mp3": "audio/mpeg", ".ogg": "audio/ogg", ".flac": "audio/flac",
+    ".wav": "audio/wav",
+}
 
 TRANSCRIPT_PROMPT = (
     "Transkripsikan audio meeting berikut secara lengkap dan verbatim dalam bahasa "
@@ -49,6 +57,29 @@ def _wait_active(client, file, timeout: float = POLL_TIMEOUT_SEC) -> None:
     raise TranscribeError(f"timeout menunggu file {file.name} menjadi ACTIVE")
 
 
+def _audio_mime_override(audio_path: Path) -> str | None:
+    """Kontainer .mp4/.webm bisa berisi audio-only (voice recorder, WhatsApp).
+    Tebakan mime_type default dari ekstensi jadi video/* dan Gemini gagal
+    memproses (error code 13 INTERNAL) — dikonfirmasi lewat reproduksi manual.
+    Override ke audio/* bila ffprobe (opsional) memastikan tak ada stream video."""
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return None
+    ext = audio_path.suffix.lower()
+    if ext not in _AUDIO_MIME:
+        return None
+    try:
+        out = subprocess.run(
+            [ffprobe, "-v", "error", "-select_streams", "v", "-show_entries",
+             "stream=codec_type", "-of", "csv=p=0", str(audio_path)],
+            capture_output=True, text=True, timeout=30,
+        )
+    except Exception:
+        return None
+    has_video = bool(out.stdout.strip())
+    return None if has_video else _AUDIO_MIME[ext]
+
+
 def _response_text(resp) -> str:
     try:
         return resp.text or ""
@@ -64,7 +95,11 @@ def transcribe_audio(audio_path: Path, job: dict, client=None) -> dict:
     dur = job.get("duration_sec")
     durasi = _idx.fmt_duration(dur) if dur else "-"
 
-    uploaded = client.files.upload(file=str(audio_path))
+    mime_type = _audio_mime_override(audio_path)
+    upload_kwargs = {"file": str(audio_path)}
+    if mime_type:
+        upload_kwargs["config"] = {"mime_type": mime_type}
+    uploaded = client.files.upload(**upload_kwargs)
     try:
         _wait_active(client, uploaded)
         try:
