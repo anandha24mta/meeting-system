@@ -14,7 +14,7 @@ except ImportError:  # pragma: no cover
 
 from . import config, indexmd, paths, queuer, recorder, recover, session
 
-SIZE = 56
+SIZE = 36
 BG = "#1e1e1e"
 IDLE_COLOR = "#888888"
 REC_COLOR = "#e53935"
@@ -84,6 +84,7 @@ class FloatingButton:
         self.canvas.bind("<ButtonPress-1>", self._on_press)
         self.canvas.bind("<B1-Motion>", self._on_drag)
         self.canvas.bind("<ButtonRelease-1>", self._on_release)
+        self.canvas.bind("<Button-3>", self._show_context_menu)  # klik-kanan → menu Keluar
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)  # praktis tak terpanggil utk overrideredirect; posisi disimpan saat drag
 
         self._pulse_t = 0.0
@@ -122,8 +123,24 @@ class FloatingButton:
     def _on_close(self):
         config.update(button_x=self.root.winfo_x(), button_y=self.root.winfo_y())
         if self.state.phase == "recording":
-            session.request_stop()  # recorder proses lain menulis WAV tetap
+            session.request_stop()
+            time.sleep(1.0)  # beri waktu thread recorder menutup WAV sebelum proses exit
         self.root.destroy()
+
+    def _show_context_menu(self, ev):
+        menu = tk.Menu(self.root, tearoff=0)
+        menu.add_command(label="Keluar", command=self._quit)
+        menu.tk_popup(ev.x_root, ev.y_root)
+
+    def _quit(self):
+        if self.state.phase == "recording":
+            if not messagebox.askyesno(
+                "Keluar saat merekam?",
+                "Rekaman sedang berjalan. Yakin mau keluar? Rekaman akan disimpan "
+                "dan bisa dipulihkan saat tombol dibuka lagi.",
+            ):
+                return
+        self._on_close()
 
     def _start_recording(self):
         recover.offer_recovery(
@@ -206,16 +223,16 @@ class FloatingButton:
         c.delete("all")
         w, h = SIZE, SIZE
         if self.state.phase == "recording":
-            r = 14 + 4 * (0.5 + 0.5 * ((self._pulse_t * 2) % 2 - 1))
+            r = 9 + 2.5 * (0.5 + 0.5 * ((self._pulse_t * 2) % 2 - 1))
             c.create_oval(w/2 - r, h/2 - r, w/2 + r, h/2 + r, fill=REC_COLOR, outline="")
-            c.create_text(w/2, h - 10, text=_fmt(self.state.elapsed_sec),
-                          fill="white", font=("Segoe UI", 8))
+            c.create_text(w/2, h - 6, text=_fmt(self.state.elapsed_sec),
+                          fill="white", font=("Segoe UI", 6))
         elif getattr(self, "_saved_until", 0) > time.monotonic():
-            r = 16
+            r = 10
             c.create_oval(w/2 - r, h/2 - r, w/2 + r, h/2 + r, fill=OK_COLOR, outline="")
-            c.create_text(w/2, h/2, text="✓", fill="white", font=("Segoe UI", 12, "bold"))
+            c.create_text(w/2, h/2, text="✓", fill="white", font=("Segoe UI", 9, "bold"))
         else:
-            r = 12
+            r = 8
             c.create_oval(w/2 - r, h/2 - r, w/2 + r, h/2 + r, fill=IDLE_COLOR, outline="")
         self.root.after(TICK_MS, self._tick)
 
