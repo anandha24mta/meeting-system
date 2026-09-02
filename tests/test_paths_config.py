@@ -30,7 +30,7 @@ from meeting import config
 
 def test_load_creates_default_on_first_run(meeting_home):
     cfg = config.load()
-    assert cfg == {"model": "gemini-flash", "default_source": "mic", "mic_device": None}
+    assert cfg == {"model": "gemini-flash-latest", "default_source": "mic", "mic_device": None}
     assert config_file_json_exists()
 
 

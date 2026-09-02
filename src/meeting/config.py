@@ -7,7 +7,7 @@ import tempfile
 
 from . import paths
 
-DEFAULTS: dict = {"model": "gemini-flash", "default_source": "mic", "mic_device": None}
+DEFAULTS: dict = {"model": "gemini-flash-latest", "default_source": "mic", "mic_device": None}
 
 
 class ConfigError(RuntimeError):

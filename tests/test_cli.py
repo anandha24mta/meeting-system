@@ -112,7 +112,8 @@ def test_record_enqueue_after_stop(meeting_home, fake_record, monkeypatch):
     job = json.loads(list(paths.queue_dir("pending").glob("*.json"))[0].read_text(encoding="utf-8"))
     assert job["id"].endswith("standup")
     assert job["needs_finalization"] is True
-    assert job["wav"] == str(paths.tmp_dir() / f"{job['id']}_mic.wav").replace(str(paths.home() / "data") + "/", "")
+    expected_wav = paths.tmp_dir() / f"{job['id']}_mic.wav"
+    assert job["wav"] == str(expected_wav.relative_to(paths.home() / "data"))
     assert not paths.session_file().exists()  # session dibersihkan
     from meeting import indexmd
     assert indexmd.rows()[0]["status"] == "pending"
