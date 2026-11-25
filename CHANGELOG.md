@@ -4,6 +4,28 @@ Semua perubahan penting pada proyek ini didokumentasikan di sini. Format
 mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), versi
 mengikuti [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-11-25
+
+### Ditambahkan
+- Deteksi kapabilitas GPU/iGPU malas (cache 24 jam, tanpa dependency GPU)
+- Opsi `analysis_device=gpu` untuk RMS audio — fallback otomatis ke CPU bila
+  CuPy/OpenCL tidak tersedia; default `cpu`
+- Opsi `--max-workers` pada `record`/`transcribe` dan config `max_workers`,
+  `max_parallel_chunks`, `per_job_memory_mb`, `thread_cap`,
+  `flush_interval_sec`, `gpu_mode`
+- Heartbeat kepemilikan per job (`.owner`) agar beberapa worker bisa jalan
+  bersamaan tanpa mengambil alih job yang masih aktif
+
+### Diubah
+- Worker tidak lagi memakai lock global: jumlah worker dibatasi oleh CPU/RAM
+  dan kedalaman antrean, lalu exit saat antrean habis
+- Potongan audio panjang ditranskripsi paralel (default 2) dengan hasil tetap
+  disusun sesuai urutan waktu
+- Finalisasi, deteksi hening, dan pemecahan chunk diproses per blok — RAM tidak
+  lagi sebanding dengan durasi meeting
+- WAV di-flush tiap 5 detik (dulu tiap blok) — lebih ringan I/O/CPU
+- `INDEX.md` dan `worker.last_error` ditulis lewat lock atomik
+
 ## [0.2.0] - 2026-09-02
 
 Perbaikan dari QA manual di mesin Windows nyata (bukan cuma unit test).
