@@ -72,3 +72,47 @@ def test_encode_opus_nonzero_rc_raises(monkeypatch):
     )
     with pytest.raises(codecs.CodecError, match="gagal"):
         codecs.encode_opus("in.wav", "out.opus", bitrate_kbps=32, channels=1)
+
+
+def test_opus_bitrate_per_quality_and_channels():
+    assert codecs.opus_bitrate("best", 1) == 64
+    assert codecs.opus_bitrate("best", 2) == 128
+    assert codecs.opus_bitrate("balanced", 1) == 32
+    assert codecs.opus_bitrate("balanced", 2) == 64
+    assert codecs.opus_bitrate("compact", 1) == 24
+    assert codecs.opus_bitrate("compact", 2) == 48
+    assert codecs.opus_bitrate("archive", 2) == 64  # fallback balanced
+
+
+def test_opus_argv_uses_vbr_voip_and_max_compression():
+    argv = codecs.build_opus_argv(
+        "/usr/bin/ffmpeg", "in.wav", "out.opus", bitrate_kbps=32, channels=2
+    )
+    assert argv[argv.index("-vbr") + 1] == "on"
+    assert argv[argv.index("-application") + 1] == "voip"
+    assert argv[argv.index("-compression_level") + 1] == "10"
+    assert "-nostdin" in argv
+
+
+def test_decode_ok_decodes_full_file_via_null_sink(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(codecs, "ffmpeg_bin", lambda: "/usr/bin/ffmpeg")
+
+    def fake_run(argv, **kw):
+        seen["argv"] = argv
+        return type("R", (), {"returncode": 0})()
+
+    monkeypatch.setattr(codecs.subprocess, "run", fake_run)
+    assert codecs.decode_ok("out.opus") is True
+    assert seen["argv"][seen["argv"].index("-f") + 1] == "null"
+
+
+def test_decode_ok_false_on_failure_or_missing_ffmpeg(monkeypatch):
+    monkeypatch.setattr(codecs, "ffmpeg_bin", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(
+        codecs.subprocess, "run",
+        lambda *a, **kw: type("R", (), {"returncode": 1})(),
+    )
+    assert codecs.decode_ok("out.opus") is False
+    monkeypatch.setattr(codecs, "ffmpeg_bin", lambda: None)
+    assert codecs.decode_ok("out.opus") is False

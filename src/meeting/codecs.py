@@ -14,6 +14,13 @@ _MIME = {
 }
 _SOUNDFILE_EXTS = {".wav", ".flac"}
 
+# (mono, stereo) kbps — encoder Opus VBR default = balanced (~32/~64 kbps).
+OPUS_BITRATES = {
+    "best": (64, 128),
+    "balanced": (32, 64),
+    "compact": (24, 48),
+}
+
 
 class CodecError(RuntimeError):
     pass
@@ -56,6 +63,12 @@ def probe_duration(path: Path) -> float | None:
         return None
 
 
+def opus_bitrate(quality: str, channels: int) -> int:
+    """kbps untuk profile + jumlah kanal; profile tak dikenal → balanced."""
+    rates = OPUS_BITRATES.get(quality, OPUS_BITRATES["balanced"])
+    return rates[1] if channels >= 2 else rates[0]
+
+
 def build_opus_argv(
     ffmpeg: str,
     src: Path,
@@ -65,10 +78,15 @@ def build_opus_argv(
     channels: int,
     samplerate: int = 16000,
 ) -> list[str]:
-    """Argv ffmpeg: input file dibaca langsung (streaming, runtime memory bounded)."""
+    """Argv ffmpeg: input file dibaca langsung (streaming, runtime memory bounded).
+
+    VBR + application voip = prioritas ucapan; compression_level 10 = kualitas
+    terbaik di libopus (!= kecepatan encode, masih CPU murni)."""
     return [
-        ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(src),
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-nostdin",
+        "-i", str(src),
         "-map", "0:a:0", "-vn", "-c:a", "libopus",
+        "-vbr", "on", "-application", "voip", "-compression_level", "10",
         "-b:a", f"{bitrate_kbps}k", "-ac", str(channels), "-ar", str(samplerate),
         str(out),
     ]
@@ -97,3 +115,19 @@ def encode_opus(
     if not out.exists():
         raise CodecError(f"ffmpeg tidak menghasilkan output: {out.name}")
     return out
+
+
+def decode_ok(path: Path, *, timeout: int = 120) -> bool:
+    """Decode penuh ke /dev/null — verify bahwa file benar-benar bisa dibaca."""
+    ffmpeg = ffmpeg_bin()
+    if not ffmpeg:
+        return False
+    argv = [
+        ffmpeg, "-hide_banner", "-v", "error", "-i", str(path),
+        "-f", "null", "-",
+    ]
+    try:
+        r = subprocess.run(argv, capture_output=True, timeout=timeout)
+    except Exception:
+        return False
+    return r.returncode == 0
