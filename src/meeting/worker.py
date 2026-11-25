@@ -1,18 +1,23 @@
-"""Worker background: FIFO, satu aktif (lock), finalisasi → transkripsi → done/failed.
+"""Worker background: FIFO, kepemilikan per job, finalisasi → transkripsi → done/failed.
 Di-spawn detached oleh queuer; exit saat antrian kosong — tidak ada proses menetap."""
 from __future__ import annotations
 
+import gc
 import json
 import os
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
 
-from . import finalizer, indexmd, paths
+from . import finalizer, indexmd, lock, paths, resources
 from .transcribe import TranscribeError, transcribe_audio  # nama di-import agar test dapat monkeypatch worker.transcribe_audio
 
 BACKOFF_SCHEDULE = (60.0, 300.0)  # 429: 60s lalu 5 menit, maks 2 retry
+HEARTBEAT_INTERVAL_SEC = 30.0
+HEARTBEAT_STALE_SEC = 900.0
+CLAIM_GRACE_SEC = 10.0
 
 
 class RateLimitedError(RuntimeError):
@@ -64,28 +69,57 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
-def _acquire_lock() -> bool:
-    lock = paths.home() / "data" / "worker.lock"
-    lock.parent.mkdir(parents=True, exist_ok=True)
-    if lock.exists():
-        try:
-            pid = int(lock.read_text().strip())
-            if _pid_alive(pid):
-                return False
-        except (ValueError, OSError):
-            pass  # korup → anggap stale
-        lock.unlink(missing_ok=True)  # stale (PID mati/korup) → ambil alih
+def _owner_path(processing: Path) -> Path:
+    return Path(str(processing) + ".owner")
+
+
+def _write_owner(processing: Path) -> None:
+    owner = _owner_path(processing)
+    tmp = owner.with_suffix(".tmp")
+    tmp.write_text(
+        json.dumps({"pid": os.getpid(), "ts": time.time()}), encoding="utf-8"
+    )
+    os.replace(tmp, owner)
+
+
+def _start_heartbeat(processing: Path):
+    stop = threading.Event()
+
+    def beat():
+        while not stop.wait(HEARTBEAT_INTERVAL_SEC):
+            try:
+                _write_owner(processing)
+            except OSError:
+                return
+
+    thread = threading.Thread(target=beat, daemon=True)
+    thread.start()
+
+    def finish():
+        stop.set()
+        thread.join(timeout=1.0)
+        _owner_path(processing).unlink(missing_ok=True)
+
+    return finish
+
+
+def _owner_alive(processing: Path) -> bool:
     try:
-        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
+        if time.time() - processing.stat().st_mtime < CLAIM_GRACE_SEC:
+            return True
+        owner = json.loads(_owner_path(processing).read_text(encoding="utf-8"))
+        return (
+            _pid_alive(int(owner["pid"]))
+            and time.time() - float(owner["ts"]) < HEARTBEAT_STALE_SEC
+        )
+    except (OSError, ValueError, KeyError, TypeError):
         return False
-    with os.fdopen(fd, "w") as f:
-        f.write(str(os.getpid()))
-    return True
 
 
-def _release_lock() -> None:
-    (paths.home() / "data" / "worker.lock").unlink(missing_ok=True)
+def _write_last_error(message: str) -> None:
+    target = paths.home() / "data" / "worker.last_error"
+    with lock.FileLock(paths.home() / "data" / "last_error.lock"):
+        target.write_text(message, encoding="utf-8")
 
 
 def _to_rate_limited(e: Exception) -> bool:
@@ -157,18 +191,14 @@ def process(job: dict, job_path: Path) -> None:
             _log("info", f"{job['id']} done")
             return
         except FatalWorkerError as e:
-            (paths.home() / "data" / "worker.last_error").write_text(
-                str(e), encoding="utf-8"
-            )
+            _write_last_error(str(e))
             _log("error", f"{job['id']} fatal: {e}")
             raise
         except TranscribeError as e:
             if "API key" in str(e):
                 # key invalid = fatal worker, bukan job failure
                 fe = FatalWorkerError(str(e))
-                (paths.home() / "data" / "worker.last_error").write_text(
-                    str(fe), encoding="utf-8"
-                )
+                _write_last_error(str(fe))
                 _log("error", f"{job['id']} fatal: {fe}")
                 raise fe from e
             last_err = e
@@ -193,16 +223,17 @@ def _oldest_pending() -> Path | None:
 
 
 def reclaim_processing() -> int:
-    """Kembalikan sisa *.json.processing ke *.json.
+    """Kembalikan *.json.processing yang tidak punya owner hidup ke pending.
 
-    Worker yang mati di tengah job (PC shutdown saat backoff 429) meninggalkan
-    file .processing yang tak pernah diproses lagi & terhitung pending selamanya.
-    Aman dipanggil hanya saat lock dipegang — pemegang lock sebelumnya pasti
-    sudah mati (lock dilepas via unlink saat exit normal; stale diambil alih)."""
+    Job yang sedang diproses worker lain dilindungi sidecar .owner (PID + ts).
+    File tanpa sidecar dianggap yatim — kasus worker lama yang mati mendadak."""
     n = 0
     for f in paths.queue_dir("pending").glob("*.processing"):
+        if _owner_alive(f):
+            continue
         os.replace(f, f.with_name(f.name[: -len(".processing")]))
-        _log("info", f"reclaim {f.name} → pending (sisa worker mati)")
+        _owner_path(f).unlink(missing_ok=True)
+        _log("info", f"reclaim {f.name} → pending (owner mati/stale)")
         n += 1
     return n
 
@@ -214,27 +245,33 @@ def run_once() -> bool:
         return False
     processing = src.with_suffix(".json.processing")
     os.replace(src, processing)  # atomic claim
+    _write_owner(processing)
+    stop_heartbeat = _start_heartbeat(processing)
     try:
         job = json.loads(processing.read_text(encoding="utf-8"))
         process(job, processing)
     except FatalWorkerError:
+        stop_heartbeat()
         # kembalikan job ke pending agar retry setelah key diperbaiki
         os.replace(processing, src)
         raise
     except Exception as e:
+        stop_heartbeat()
         _log("error", f"job {src.stem} error tak terduga: {e}")
         os.replace(processing, src)  # job kembali ke pending utk run berikutnya
         time.sleep(1.0)  # jangan tight-loop: error persisten ≠ spin CPU/log tanpa batas
+    else:
+        stop_heartbeat()
+    finally:
+        gc.collect()  # lepas array audio antar job — RSS tidak naik seiring antrean
     return True
 
 
 def main() -> int:
     paths.ensure_dirs()
-    if not _acquire_lock():
-        _log("info", "worker lain sudah aktif — exit")
-        return 0
+    resources.apply_thread_limits()
     try:
-        reclaim_processing()  # sisa worker mati → pending lagi (lock = pemilik lama pasti mati)
+        reclaim_processing()  # owner mati/stale → pending lagi
         while run_once():
             pass
         # sukses total: hapus error lama agar `meeting status` tak melaporkan
@@ -243,8 +280,6 @@ def main() -> int:
     except FatalWorkerError as e:
         _log("error", f"worker exit fatal: {e}")  # last_error sudah ditulis process()
         return 1
-    finally:
-        _release_lock()
     return 0
 
 

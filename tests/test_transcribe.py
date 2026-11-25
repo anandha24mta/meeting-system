@@ -237,6 +237,30 @@ def test_split_soundfile_produces_correct_frame_ranges(meeting_home, audio, tmp_
         assert sf.info(str(c)).frames == 4000
 
 
+def test_split_ffmpeg_stream_copies_lossy_source(meeting_home, tmp_path, monkeypatch):
+    from meeting import paths
+
+    paths.ensure_dirs()
+    src = tmp_path / "meeting.m4a"
+    src.write_bytes(b"fake")
+    calls = []
+
+    def fake_run(argv, **kw):
+        calls.append(argv)
+        last = Path(argv[-1])
+        last.write_bytes(b"chunk")
+        return type("R", (), {"returncode": 0})()
+
+    from pathlib import Path
+
+    monkeypatch.setattr(transcribe.shutil, "which", lambda name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(transcribe.subprocess, "run", fake_run)
+    chunks = transcribe._split_ffmpeg(src, [(0.0, 900.0)], "copyjob")
+    assert chunks[0].suffix == ".m4a"
+    assert "-c:a" in calls[0] and "copy" in calls[0]
+    assert "-ar" not in calls[0]  # tidak decode/encode ulang
+
+
 def test_split_ffmpeg_raises_clear_error_when_missing(meeting_home, tmp_path, monkeypatch):
     monkeypatch.setattr(transcribe.shutil, "which", lambda name: None)
     with pytest.raises(transcribe.TranscribeError, match="ffmpeg"):
@@ -263,7 +287,7 @@ def test_transcribe_splits_long_audio_and_concatenates_with_markers(
     client = FakeClient(text="Halo, ini transkrip.")
     meta = transcribe.transcribe_audio(audio, make_job(), client=client)
 
-    assert client.files.uploaded == [str(chunk_a), str(chunk_b)]
+    assert sorted(client.files.uploaded) == sorted([str(chunk_a), str(chunk_b)])
     assert client.models.calls == 2
     assert meta["status"] == "done"
 
@@ -313,6 +337,21 @@ def test_transcribe_fails_clearly_on_silent_audio_without_calling_gemini(
     with pytest.raises(transcribe.TranscribeError, match="hening"):
         transcribe.transcribe_audio(silent, make_job(), client=client)
     assert client.files.uploaded == []  # tidak pernah upload sama sekali
+
+
+def test_streaming_analysis_never_reads_whole_file(meeting_home, audio, monkeypatch):
+    import soundfile as sf
+    from meeting import paths
+
+    paths.ensure_dirs()
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("sf.read would load the whole meeting into RAM")
+
+    monkeypatch.setattr(sf, "read", forbidden)
+    assert transcribe._is_silent(audio) is False
+    chunks = transcribe._split_soundfile(audio, [(0.0, 0.25), (0.25, 0.25)], "stream")
+    assert [sf.info(c).frames for c in chunks] == [4000, 4000]
 
 
 def test_transcribe_chunk_local_cleanup_even_on_failure(meeting_home, audio, monkeypatch):

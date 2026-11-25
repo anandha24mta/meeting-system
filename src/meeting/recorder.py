@@ -10,10 +10,11 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from . import paths, session
+from . import config, paths, session
 
 SAMPLE_RATE = 16000
 BYTES_PER_HOUR_MONO_16BIT = 115 * 1024 * 1024  # ≈ 32 kB/s
+DEFAULT_FLUSH_INTERVAL_SEC = 5.0
 
 
 class RecorderError(RuntimeError):
@@ -40,6 +41,31 @@ class _Stop(Exception):
     pass
 
 
+class _TimedWriter:
+    """Flush maksimal sekali per interval; final flush tetap di finally."""
+
+    def __init__(self, handle, interval: float) -> None:
+        self.handle = handle
+        self.interval = max(0.0, float(interval))
+        self.last = time.monotonic()
+
+    def write(self, data) -> None:
+        self.handle.write(data)
+        if time.monotonic() - self.last >= self.interval:
+            self.flush()
+
+    def flush(self) -> None:
+        self.handle.flush()
+        self.last = time.monotonic()
+
+
+def _flush_interval() -> float:
+    try:
+        return float(config.load().get("flush_interval_sec", DEFAULT_FLUSH_INTERVAL_SEC))
+    except Exception:
+        return DEFAULT_FLUSH_INTERVAL_SEC
+
+
 def _record_mic(job_id: str, wav: Path, mic_device: str | None) -> float:
     """sounddevice blocking stream; return durasi detik. Raise _Stop bila device hilang."""
     import sounddevice as sd
@@ -47,11 +73,11 @@ def _record_mic(job_id: str, wav: Path, mic_device: str | None) -> float:
     frames = [0]
 
     def callback(indata, frame_count, time_info, status):
-        f.write(indata.copy())
-        f.flush()  # patch header — file selalu valid
+        writer.write(indata.copy())
         frames[0] += frame_count
 
     f = _writer(wav)
+    writer = _TimedWriter(f, _flush_interval())
     try:
         with sd.InputStream(
             samplerate=SAMPLE_RATE, channels=1, dtype="float32",
@@ -65,7 +91,7 @@ def _record_mic(job_id: str, wav: Path, mic_device: str | None) -> float:
         raise _Stop(f"mic device error: {e}") from e
     finally:
         try:
-            f.flush()
+            writer.flush()
         except Exception:
             pass
         f.close()
@@ -81,20 +107,20 @@ def _record_sys(job_id: str, wav: Path) -> float:
     spk = sc.default_speaker()
     mic = sc.get_microphone(id=str(spk.name), include_loopback=True)
     f = _writer(wav)
+    writer = _TimedWriter(f, _flush_interval())
     n = 0
     try:
         with mic.recorder(samplerate=SAMPLE_RATE, blocksize=blocksize,
                           channels=1, exclusive_mode=False) as rec:
             while not session.stop_requested():
                 block = rec.record(numframes=blocksize)
-                f.write(np.asarray(block, dtype=np.float32).reshape(-1, 1))
-                f.flush()
+                writer.write(np.asarray(block, dtype=np.float32).reshape(-1, 1))
                 n += len(block)
     except Exception as e:  # termasuk device dicabut
         raise _Stop(f"loopback error: {e}") from e
     finally:
         try:
-            f.flush()
+            writer.flush()
         except Exception:
             pass
         f.close()

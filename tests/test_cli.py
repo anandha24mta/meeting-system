@@ -87,6 +87,12 @@ def test_record_default_uses_config_source(meeting_home, fake_record, monkeypatc
     assert config.load()["default_source"] == "mic"
 
 
+def test_record_max_workers_updates_config(meeting_home, fake_record, monkeypatch):
+    monkeypatch.setattr(cli.queuer, "spawn_worker", lambda: None)
+    assert cli.main(["record", "--max-workers", "3"]) == 0
+    assert config.load()["max_workers"] == 3
+
+
 def test_record_sys_flag_updates_config(meeting_home, fake_record, monkeypatch):
     monkeypatch.setattr(cli.queuer, "spawn_worker", lambda: None)
     cli.main(["record", "--sys"])

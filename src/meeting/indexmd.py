@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 
-from . import paths
+from . import lock, paths
 
 _HEADER = "# INDEX\n\n| id | tanggal | durasi | status | path |\n|---|---|---|---|---|\n"
 _ROW_RE = re.compile(r"^\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*$")
@@ -14,6 +14,12 @@ def _row_line(r: dict) -> str:
 
 
 def upsert(row: dict) -> None:
+    guard = lock.FileLock(paths.home() / "data" / "index.lock")
+    with guard:
+        _upsert_unlocked(row)
+
+
+def _upsert_unlocked(row: dict) -> None:
     path = paths.index_file()
     if not path.exists():
         path.write_text(_HEADER + _row_line(row) + "\n", encoding="utf-8")

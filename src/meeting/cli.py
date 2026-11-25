@@ -22,6 +22,8 @@ def _eprint(msg: str) -> None:
 
 def cmd_record(args) -> int:
     paths.ensure_dirs()  # tmp/ dkk harus ada sebelum check_disk (statvfs butuh path)
+    if getattr(args, "max_workers", None) is not None:
+        config.update(max_workers=args.max_workers)
     cfg = config.load()
     source = args.sys and "sys" or args.mic and "mic" or args.both and "both" or cfg["default_source"]
     if args.sys or args.mic or args.both:
@@ -128,6 +130,8 @@ def _meta_from_disk(job_id: str, source: str) -> dict:
 
 
 def cmd_transcribe(args) -> int:
+    if getattr(args, "max_workers", None) is not None:
+        config.update(max_workers=args.max_workers)
     src = Path(args.file)
     if not src.exists():
         _eprint(f"file tidak ditemukan: {src}")
@@ -271,10 +275,18 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--mic", action="store_true", help="mikrofon")
     pr.add_argument("--both", action="store_true", help="mic + audio sistem")
     pr.add_argument("--name", default=None, help="nama job (default: tanggal-jam)")
+    pr.add_argument(
+        "--max-workers", type=int, default=None,
+        help="maks worker paralel saat antrean penuh (default: 4, atau config)",
+    )
     pr.set_defaults(func=cmd_record)
 
     pt = sub.add_parser("transcribe", help="transkrip file yang sudah ada")
     pt.add_argument("file")
+    pt.add_argument(
+        "--max-workers", type=int, default=None,
+        help="maks worker paralel saat antrean penuh (default: 4, atau config)",
+    )
     pt.set_defaults(func=cmd_transcribe)
 
     ps = sub.add_parser("status", help="status antrian + sesi")

@@ -4,11 +4,12 @@ from __future__ import annotations
 import json
 import math
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 import subprocess
 import time
 from pathlib import Path
 
-from . import config, indexmd, paths
+from . import config, hwaccel, indexmd, paths
 
 _AUDIO_MIME = {
     ".mp4": "audio/mp4", ".m4a": "audio/mp4", ".webm": "audio/webm",
@@ -137,17 +138,51 @@ def _chunk_offsets(duration: float) -> list[tuple[float, float]]:
     return [(i * size, size) for i in range(n)]
 
 
+ANALYSIS_BLOCK_FRAMES = 8192
+
+
+def _iter_audio_blocks(audio_path: Path):
+    """Yield bounded float32 blocks; never loads a whole meeting into RAM."""
+    import soundfile as sf
+
+    with sf.SoundFile(str(audio_path), mode="r") as handle:
+        while True:
+            block = handle.read(ANALYSIS_BLOCK_FRAMES, dtype="float32")
+            if len(block) == 0:
+                return
+            yield block
+
+
 def _split_soundfile(audio_path: Path, offsets: list[tuple[float, float]], job_id: str) -> list[Path]:
     import soundfile as sf
 
     sr = sf.info(str(audio_path)).samplerate
     out_paths: list[Path] = []
-    for i, (start, length) in enumerate(offsets):
-        data, _ = sf.read(str(audio_path), start=int(start * sr), frames=int(round(length * sr)))
-        out = paths.tmp_dir() / f"{job_id}_chunk{i}.flac"
-        sf.write(str(out), data, sr, format="FLAC")
-        out_paths.append(out)
+    with sf.SoundFile(str(audio_path), mode="r") as source:
+        for i, (start, length) in enumerate(offsets):
+            source.seek(int(start * sr))
+            remaining = int(round(length * sr))
+            out = paths.tmp_dir() / f"{job_id}_chunk{i}.flac"
+            with sf.SoundFile(
+                str(out), mode="w", samplerate=sr, channels=1,
+                subtype="PCM_16", format="FLAC",
+            ) as target:
+                while remaining > 0:
+                    block = source.read(min(ANALYSIS_BLOCK_FRAMES, remaining), dtype="float32")
+                    if len(block) == 0:
+                        break
+                    if block.ndim > 1:
+                        block = block.mean(axis=1)
+                    target.write(block)
+                    remaining -= len(block)
+            out_paths.append(out)
     return out_paths
+
+
+_COPY_CHUNK_EXT = {
+    ".m4a": ".m4a", ".mp4": ".m4a", ".ogg": ".ogg", ".opus": ".ogg",
+    ".webm": ".webm", ".mp3": ".mp3", ".mkv": ".mkv",
+}
 
 
 def _split_ffmpeg(audio_path: Path, offsets: list[tuple[float, float]], job_id: str) -> list[Path]:
@@ -157,14 +192,28 @@ def _split_ffmpeg(audio_path: Path, offsets: list[tuple[float, float]], job_id: 
             "Meeting ini perlu dipecah jadi beberapa bagian (durasi panjang) dan format "
             "filenya butuh ffmpeg untuk itu — install dengan: winget install ffmpeg"
         )
+    # Format lossy dipotong dengan stream copy: tanpa decode + encode ulang.
+    copy_ext = _COPY_CHUNK_EXT.get(audio_path.suffix.lower())
     out_paths: list[Path] = []
     for i, (start, length) in enumerate(offsets):
-        out = paths.tmp_dir() / f"{job_id}_chunk{i}.flac"
-        rc = subprocess.run(
-            [ffmpeg, "-y", "-ss", str(start), "-i", str(audio_path), "-t", str(length),
-             "-ac", "1", "-ar", "16000", str(out)],
-            capture_output=True,
-        )
+        ext = copy_ext or ".flac"
+        out = paths.tmp_dir() / f"{job_id}_chunk{i}{ext}"
+        if copy_ext:
+            argv = [ffmpeg, "-y", "-ss", str(start), "-i", str(audio_path),
+                    "-t", str(length), "-map", "0:a:0", "-vn", "-c:a", "copy", str(out)]
+        else:
+            argv = [ffmpeg, "-y", "-ss", str(start), "-i", str(audio_path),
+                    "-t", str(length), "-ac", "1", "-ar", "16000", str(out)]
+        rc = subprocess.run(argv, capture_output=True)
+        if rc.returncode != 0 or not out.exists():
+            if copy_ext:
+                # fallback: seek ulang presisi lewat decode sekali
+                out = paths.tmp_dir() / f"{job_id}_chunk{i}.flac"
+                rc = subprocess.run(
+                    [ffmpeg, "-y", "-ss", str(start), "-i", str(audio_path),
+                     "-t", str(length), "-ac", "1", "-ar", "16000", str(out)],
+                    capture_output=True,
+                )
         if rc.returncode != 0 or not out.exists():
             for p in out_paths:
                 p.unlink(missing_ok=True)
@@ -188,6 +237,60 @@ def _prepare_chunks(audio_path: Path, job_id: str) -> list[tuple[Path, float]]:
     return [(cp, start) for cp, (start, _length) in zip(chunk_paths, offsets)]
 
 
+GPU_ANALYSIS_MIN_SEC = 300.0
+
+
+def _cpu_rms(audio_path: Path) -> float:
+    """RMS over streamed blocks; peak RAM is one block, not the whole file."""
+    import numpy as np
+
+    total = 0.0
+    count = 0
+    for block in _iter_audio_blocks(audio_path):
+        if block.ndim > 1:
+            block = block.mean(axis=1)
+        total += float(np.sum(np.square(block, dtype=np.float32), dtype=np.float64))
+        count += len(block)
+    if count == 0:
+        return 0.0
+    return float(np.sqrt(total / count))
+
+
+def _gpu_rms(audio_path: Path) -> float:
+    """Optional CuPy RMS; GPU library imported only after explicit opt-in."""
+    import cupy as cp
+
+    total = 0.0
+    count = 0
+    for block in _iter_audio_blocks(audio_path):
+        if block.ndim > 1:
+            block = block.mean(axis=1)
+        array = cp.asarray(block)
+        total += float(cp.sum(array * array).get())
+        count += len(block)
+    if count == 0:
+        return 0.0
+    return float((total / count) ** 0.5)
+
+
+def _should_use_gpu(audio_path: Path) -> bool:
+    if config.load().get("analysis_device") != "gpu":
+        return False
+    if not hwaccel.probe().get("available"):
+        return False
+    duration = _probe_duration(audio_path)
+    return duration is not None and duration >= GPU_ANALYSIS_MIN_SEC
+
+
+def _rms(audio_path: Path) -> float:
+    if _should_use_gpu(audio_path):
+        try:
+            return _gpu_rms(audio_path)
+        except Exception:
+            pass
+    return _cpu_rms(audio_path)
+
+
 def _is_silent(audio_path: Path) -> bool:
     """True bila audio (yg soundfile bisa baca) nyaris hening total sepanjang
     durasinya. File yg soundfile tak bisa baca (mp4/mp3 mentah dll) tidak dicek —
@@ -195,12 +298,7 @@ def _is_silent(audio_path: Path) -> bool:
     if audio_path.suffix.lower() not in _SOUNDFILE_EXTS:
         return False
     try:
-        import numpy as np
-        import soundfile as sf
-        data, _sr = sf.read(str(audio_path), dtype="float32", always_2d=False)
-        if data.size == 0:
-            return True
-        return float(np.sqrt(np.mean(np.square(data)))) < SILENCE_RMS_THRESHOLD
+        return _rms(audio_path) < SILENCE_RMS_THRESHOLD
     except Exception:
         return False
 
@@ -250,9 +348,20 @@ def transcribe_audio(audio_path: Path, job: dict, client=None) -> dict:
     chunks = _prepare_chunks(audio_path, job["id"])
     is_split = len(chunks) > 1
     parts: list[str] = []
+    workers = max(1, min(len(chunks), int(config.load().get("max_parallel_chunks", 2))))
     try:
-        for i, (chunk_path, offset) in enumerate(chunks):
-            chunk_text = _transcribe_chunk(client, job["model"], chunk_path)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [
+                pool.submit(_transcribe_chunk, client, job["model"], chunk_path)
+                for chunk_path, _offset in chunks
+            ]
+            try:
+                texts = [future.result() for future in futures]
+            except Exception:
+                for future in futures:
+                    future.cancel()
+                raise
+        for i, ((_chunk_path, offset), chunk_text) in enumerate(zip(chunks, texts)):
             if is_split:
                 parts.append(f"--- Bagian {i + 1} (mulai ≈ {_idx.fmt_duration(offset)}) ---\n\n{chunk_text}")
             else:

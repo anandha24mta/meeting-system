@@ -210,14 +210,34 @@ def test_index_updated_on_failed(meeting_home, flac, monkeypatch):
     assert rows and rows[0]["status"] == "failed"
 
 
-def test_lock_single_worker(meeting_home, flac, monkeypatch):
+def test_owner_heartbeat_protects_live_job(meeting_home):
     from meeting import paths
     paths.ensure_dirs()
-    lock = paths.home() / "data" / "worker.lock"
-    lock.write_text("999999")  # PID tidak hidup → stale
-    # stale lock dengan PID mati diambil alih
-    assert worker._acquire_lock() is True
-    assert worker._acquire_lock() is False  # kini hidup (PID kita)
+    processing = paths.queue_dir("pending") / "j1.json.processing"
+    processing.write_text(json.dumps(make_job(id="j1")), encoding="utf-8")
+    worker._write_owner(processing)
+
+    assert worker._owner_alive(processing) is True
+    assert worker.reclaim_processing() == 0
+    assert processing.exists()
+
+
+def test_reclaim_takes_over_dead_owner(meeting_home):
+    from meeting import paths
+    paths.ensure_dirs()
+    processing = paths.queue_dir("pending") / "j2.json.processing"
+    processing.write_text(json.dumps(make_job(id="j2")), encoding="utf-8")
+    owner = worker._owner_path(processing)
+    owner.write_text(json.dumps({"pid": 999999, "ts": 0}), encoding="utf-8")
+    old = time.time() - 1000
+    import os
+
+    os.utime(processing, (old, old))
+
+    assert worker._owner_alive(processing) is False
+    assert worker.reclaim_processing() == 1
+    assert (paths.queue_dir("pending") / "j2.json").exists()
+    assert not owner.exists()
 
 
 def test_fatal_api_key_error_writes_last_error(meeting_home, flac, monkeypatch):
@@ -242,6 +262,10 @@ def test_reclaim_processing_renames_leftovers(meeting_home):
     paths.ensure_dirs()
     left = paths.queue_dir("pending") / "j1.json.processing"
     left.write_text(json.dumps(make_job(id="j1")), encoding="utf-8")
+    import os
+
+    old = time.time() - 1000
+    os.utime(left, (old, old))
 
     n = worker.reclaim_processing()
 
@@ -254,6 +278,32 @@ def test_reclaim_processing_noop_when_clean(meeting_home):
     from meeting import paths
     paths.ensure_dirs()
     assert worker.reclaim_processing() == 0
+
+
+def test_gc_runs_after_each_job(meeting_home, flac, monkeypatch):
+    from meeting import paths
+
+    paths.ensure_dirs()
+    monkeypatch.setattr(worker, "transcribe_audio", FakeTranscriber())
+    calls = []
+    monkeypatch.setattr(worker.gc, "collect", lambda: calls.append(1))
+
+    queuer.enqueue(make_job(id="gc-1"))
+    queuer.enqueue(make_job(id="gc-2"))
+    assert worker.main() == 0
+    assert len(calls) >= 2
+
+
+def test_main_exits_idle_without_leftover_owners(meeting_home, flac, monkeypatch):
+    from meeting import paths
+
+    paths.ensure_dirs()
+    monkeypatch.setattr(worker, "transcribe_audio", FakeTranscriber())
+    queuer.enqueue(make_job(id="idle-1"))
+    assert worker.main() == 0
+    assert not list(paths.queue_dir("pending").glob("*.processing"))
+    assert not list(paths.queue_dir("pending").glob("*.owner"))
+    assert not list(paths.queue_dir("pending").glob("*.json"))
 
 
 def test_main_clears_last_error_on_success(meeting_home, flac, monkeypatch):
