@@ -270,3 +270,58 @@ def test_main_clears_last_error_on_success(meeting_home, flac, monkeypatch):
     assert worker.main() == 0
     assert not (paths.home() / "data" / "worker.last_error").exists()
     assert list(paths.queue_dir("done").glob("*.json"))  # job memang diproses
+
+
+def _seed_recorded_wav(job_id):
+    import numpy as np
+    import soundfile as sf
+    from meeting import paths
+
+    paths.ensure_dirs()
+    wav = paths.tmp_dir() / f"{job_id}_mic.wav"
+    t = np.linspace(0, 0.3, 4800, endpoint=False)
+    sf.write(wav, (0.2 * np.sin(2 * np.pi * 440 * t)).astype(np.float32), 16000, subtype="PCM_16")
+    return wav
+
+
+def test_aac_opt_in_finalizes_to_m4a(meeting_home, monkeypatch):
+    from meeting import config, media, paths
+
+    job_id = "aac1"
+    wav = _seed_recorded_wav(job_id)
+    config.update(audio_codec="aac", container="auto")
+    calls = []
+
+    def fake_encode(src, dst, channels=1, **kw):
+        calls.append((str(src), str(dst), channels))
+        dst.write_bytes(b"m4a")
+        return dst
+
+    monkeypatch.setattr(media, "encode_aac", fake_encode)
+    monkeypatch.setattr(worker, "transcribe_audio", FakeTranscriber())
+    queuer.enqueue(make_job(id=job_id, wav=f"tmp/{wav.name}", needs_finalization=True))
+    assert worker.run_once() is True
+
+    done = json.loads((paths.queue_dir("done") / f"{job_id}.json").read_text())
+    assert done["audio"] == f"recordings/{job_id}.m4a"
+    assert done["codec"] == "aac" and done["vbr"] is True
+    assert done["bitrate"] == 64000
+    assert calls and calls[0][1].endswith(".m4a")
+    assert not wav.exists()
+
+
+def test_aac_opt_in_falls_back_to_flac_without_ffmpeg(meeting_home, monkeypatch):
+    from meeting import config, media, paths
+
+    job_id = "aac2"
+    wav = _seed_recorded_wav(job_id)
+    config.update(audio_codec="aac")
+    monkeypatch.setattr(media, "encode_aac", lambda *a, **kw: (_ for _ in ()).throw(media.MediaError("no ffmpeg")))
+    monkeypatch.setattr(worker, "transcribe_audio", FakeTranscriber())
+    queuer.enqueue(make_job(id=job_id, wav=f"tmp/{wav.name}", needs_finalization=True))
+    assert worker.run_once() is True
+
+    done = json.loads((paths.queue_dir("done") / f"{job_id}.json").read_text())
+    assert done["audio"] == f"recordings/{job_id}.flac"
+    assert "codec" not in done
+    assert (paths.recordings_dir() / f"{job_id}.flac").exists()

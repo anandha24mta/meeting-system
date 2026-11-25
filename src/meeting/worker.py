@@ -9,7 +9,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import finalizer, indexmd, paths
+from . import config, finalizer, indexmd, media, paths
 from .transcribe import TranscribeError, transcribe_audio  # nama di-import agar test dapat monkeypatch worker.transcribe_audio
 
 BACKOFF_SCHEDULE = (60.0, 300.0)  # 429: 60s lalu 5 menit, maks 2 retry
@@ -144,6 +144,23 @@ def process(job: dict, job_path: Path) -> None:
             return
         job["audio"] = str(flac.relative_to(paths.home() / "data"))
         job["needs_finalization"] = False
+
+        cfg = config.load()
+        if media.wants_aac(cfg):
+            container = media.container_for(cfg)
+            channels = 2 if isinstance(raw, list) and len(raw) > 1 else 1
+            out = flac.with_suffix(f".{container}")
+            try:
+                media.encode_aac(flac, out, channels)
+            except media.MediaError:
+                pass  # ffmpeg absence: FLAC tetap jadi hasil akhir
+            else:
+                job["audio"] = str(out.relative_to(paths.home() / "data"))
+                job["codec"] = "aac"
+                job["container"] = container
+                job["bitrate"] = media.aac_bitrate(channels)
+                job["vbr"] = True
+                flac.unlink(missing_ok=True)
 
     _upsert_index(job, "pending")
 

@@ -74,3 +74,22 @@ def test_container_mime_distinguishes_audio_only_from_video():
     assert media.container_mime("zoom.mp4", False) == "audio/mp4"
     assert media.container_mime("zoom.mp4", True) is None
     assert media.container_mime("zoom.mkv", True) == "video/x-matroska"
+
+
+def test_wants_aac_only_on_explicit_opt_in():
+    assert media.wants_aac({}) is False
+    assert media.wants_aac({"audio_codec": "flac"}) is False
+    assert media.wants_aac({"audio_codec": "aac"}) is True
+
+
+def test_container_for_auto_picks_m4a_for_recordings_and_source_for_files():
+    assert media.container_for({}) == "m4a"
+    assert media.container_for({"container": "auto"}, source_ext=".mp4") == "mp4"
+    assert media.container_for({"container": "auto"}, source_ext=".mkv") == "mkv"
+    assert media.container_for({"container": "auto"}, source_ext=".mp3") == "m4a"
+
+
+def test_container_for_explicit_choice_and_bad_value():
+    assert media.container_for({"container": "m4a"}, source_ext=".mp4") == "m4a"
+    with pytest.raises(media.MediaError, match="container tidak dikenal"):
+        media.container_for({"container": "avi"})

@@ -8,13 +8,9 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import config, indexmd, paths
+from . import config, indexmd, media, paths
 
-_AUDIO_MIME = {
-    ".mp4": "audio/mp4", ".m4a": "audio/mp4", ".webm": "audio/webm",
-    ".mp3": "audio/mpeg", ".ogg": "audio/ogg", ".flac": "audio/flac",
-    ".wav": "audio/wav",
-}
+_AUDIO_MIME = dict(media.AUDIO_MIME)
 
 TRANSCRIPT_PROMPT = (
     "Transkripsikan audio meeting berikut secara lengkap dan verbatim dalam bahasa "
@@ -95,7 +91,7 @@ def _audio_mime_override(audio_path: Path) -> str | None:
     except Exception:
         return None
     has_video = bool(out.stdout.strip())
-    return None if has_video else _AUDIO_MIME[ext]
+    return media.container_mime(audio_path, has_video)
 
 
 def _response_text(resp) -> str:

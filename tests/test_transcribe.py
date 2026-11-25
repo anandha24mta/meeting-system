@@ -196,6 +196,30 @@ def test_transcribe_no_override_when_ffprobe_missing(meeting_home, tmp_path, mon
     assert client.files.upload_configs[0] is None
 
 
+def test_audio_mime_mapping_covers_m4a_and_mkv():
+    assert transcribe._AUDIO_MIME[".m4a"] == "audio/mp4"
+    assert transcribe._AUDIO_MIME[".mkv"] == "audio/x-matroska"
+    assert transcribe._AUDIO_MIME[".mp4"] == "audio/mp4"
+
+
+def test_transcribe_override_for_mkv_audio_and_video(meeting_home, tmp_path, monkeypatch):
+    from meeting import paths
+    paths.ensure_dirs()
+    audio = tmp_path / "clip.mkv"
+    audio.write_bytes(b"fake")
+    monkeypatch.setattr(transcribe.shutil, "which", lambda name: "/usr/bin/ffprobe")
+
+    monkeypatch.setattr(transcribe.subprocess, "run", _fake_ffprobe_run(""))
+    client = FakeClient()
+    transcribe.transcribe_audio(audio, make_job(), client=client)
+    assert client.files.upload_configs[0] == {"mime_type": "audio/x-matroska"}
+
+    monkeypatch.setattr(transcribe.subprocess, "run", _fake_ffprobe_run("video\n"))
+    client = FakeClient()
+    transcribe.transcribe_audio(audio, make_job(), client=client)
+    assert client.files.upload_configs[0] == {"mime_type": "video/x-matroska"}
+
+
 # --- chunking: audio panjang dipecah jadi beberapa bagian ---------------------
 
 def test_chunk_offsets_splits_evenly():

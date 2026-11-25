@@ -28,6 +28,22 @@ class MediaError(RuntimeError):
     pass
 
 
+def wants_aac(cfg: dict) -> bool:
+    return str(cfg.get("audio_codec", "flac")).lower() == "aac"
+
+
+def container_for(cfg: dict, *, source_ext: str | None = None) -> str:
+    """auto: m4a untuk rekaman audio-only, container sumber untuk file audio/video."""
+    choice = str(cfg.get("container", "auto")).lower().lstrip(".")
+    if choice not in CONTAINERS:
+        raise MediaError(f"container tidak dikenal: {choice!r} (auto/m4a/mp4/mkv)")
+    if choice != "auto":
+        return choice
+    if source_ext and source_ext.lower() in (".m4a", ".mp4", ".mkv"):
+        return source_ext.lower().lstrip(".")
+    return "m4a"
+
+
 def audio_mime(path: Path | str) -> str | None:
     return AUDIO_MIME.get(Path(path).suffix.lower())
 
