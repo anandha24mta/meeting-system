@@ -263,7 +263,7 @@ def test_transcribe_splits_long_audio_and_concatenates_with_markers(
     client = FakeClient(text="Halo, ini transkrip.")
     meta = transcribe.transcribe_audio(audio, make_job(), client=client)
 
-    assert client.files.uploaded == [str(chunk_a), str(chunk_b)]
+    assert sorted(client.files.uploaded) == sorted([str(chunk_a), str(chunk_b)])
     assert client.models.calls == 2
     assert meta["status"] == "done"
 

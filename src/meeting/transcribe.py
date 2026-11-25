@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import math
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 import subprocess
 import time
 from pathlib import Path
@@ -327,9 +328,20 @@ def transcribe_audio(audio_path: Path, job: dict, client=None) -> dict:
     chunks = _prepare_chunks(audio_path, job["id"])
     is_split = len(chunks) > 1
     parts: list[str] = []
+    workers = max(1, min(len(chunks), int(config.load().get("max_parallel_chunks", 2))))
     try:
-        for i, (chunk_path, offset) in enumerate(chunks):
-            chunk_text = _transcribe_chunk(client, job["model"], chunk_path)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [
+                pool.submit(_transcribe_chunk, client, job["model"], chunk_path)
+                for chunk_path, _offset in chunks
+            ]
+            try:
+                texts = [future.result() for future in futures]
+            except Exception:
+                for future in futures:
+                    future.cancel()
+                raise
+        for i, ((_chunk_path, offset), chunk_text) in enumerate(zip(chunks, texts)):
             if is_split:
                 parts.append(f"--- Bagian {i + 1} (mulai ≈ {_idx.fmt_duration(offset)}) ---\n\n{chunk_text}")
             else:
