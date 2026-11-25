@@ -237,6 +237,30 @@ def test_split_soundfile_produces_correct_frame_ranges(meeting_home, audio, tmp_
         assert sf.info(str(c)).frames == 4000
 
 
+def test_split_ffmpeg_stream_copies_lossy_source(meeting_home, tmp_path, monkeypatch):
+    from meeting import paths
+
+    paths.ensure_dirs()
+    src = tmp_path / "meeting.m4a"
+    src.write_bytes(b"fake")
+    calls = []
+
+    def fake_run(argv, **kw):
+        calls.append(argv)
+        last = Path(argv[-1])
+        last.write_bytes(b"chunk")
+        return type("R", (), {"returncode": 0})()
+
+    from pathlib import Path
+
+    monkeypatch.setattr(transcribe.shutil, "which", lambda name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(transcribe.subprocess, "run", fake_run)
+    chunks = transcribe._split_ffmpeg(src, [(0.0, 900.0)], "copyjob")
+    assert chunks[0].suffix == ".m4a"
+    assert "-c:a" in calls[0] and "copy" in calls[0]
+    assert "-ar" not in calls[0]  # tidak decode/encode ulang
+
+
 def test_split_ffmpeg_raises_clear_error_when_missing(meeting_home, tmp_path, monkeypatch):
     monkeypatch.setattr(transcribe.shutil, "which", lambda name: None)
     with pytest.raises(transcribe.TranscribeError, match="ffmpeg"):
