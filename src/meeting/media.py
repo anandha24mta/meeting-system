@@ -19,6 +19,11 @@ AUDIO_MIME = {
 
 VIDEO_MIME = {".mkv": "video/x-matroska"}
 
+CODEC_BY_EXT = {
+    ".flac": "flac", ".wav": "pcm", ".m4a": "aac", ".mp4": "aac",
+    ".mkv": "aac", ".mp3": "mp3", ".ogg": "vorbis", ".webm": "opus",
+}
+
 CONTAINERS = ("auto", "m4a", "mp4", "mkv")
 VIDEO_SOURCE_EXTS = (".mp4", ".mkv")
 NATIVE_Q = {1: "0.5", 2: "1.0"}
@@ -48,6 +53,10 @@ def container_for(cfg: dict, *, source_ext: str | None = None) -> str:
 
 def audio_mime(path: Path | str) -> str | None:
     return AUDIO_MIME.get(Path(path).suffix.lower())
+
+
+def guess_codec(path: Path | str) -> str | None:
+    return CODEC_BY_EXT.get(Path(path).suffix.lower())
 
 
 def container_mime(path: Path | str, has_video: bool) -> str | None:

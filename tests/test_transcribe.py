@@ -339,6 +339,45 @@ def test_transcribe_fails_clearly_on_silent_audio_without_calling_gemini(
     assert client.files.uploaded == []  # tidak pernah upload sama sekali
 
 
+def test_meta_has_additive_fields_with_backward_compatible_defaults(meeting_home, audio):
+    from meeting import paths
+    paths.ensure_dirs()
+    meta = transcribe.transcribe_audio(audio, make_job(), client=FakeClient())
+    meta_json = json.loads(
+        (paths.output_dir() / meta["id"] / "meta.json").read_text(encoding="utf-8")
+    )
+    for key in ("codec", "container", "bitrate", "vbr", "vfr", "video_passthrough"):
+        assert key in meta_json
+    assert meta["codec"] == "flac"
+    assert meta["container"] == "flac"
+    assert meta["bitrate"] is None
+    assert meta["vbr"] is False
+    assert meta["vfr"] is False
+    assert meta["video_passthrough"] is False
+
+
+def test_meta_reflects_aac_video_passthrough_job_fields(meeting_home, tmp_path, monkeypatch):
+    from meeting import paths
+    paths.ensure_dirs()
+    audio = tmp_path / "zoom.mp4"
+    audio.write_bytes(b"fake")
+    monkeypatch.setattr(transcribe.shutil, "which", lambda name: None)
+    job = make_job(source="file")
+    job.update({
+        "codec": "aac", "container": "mp4", "bitrate": 64000,
+        "vbr": True, "vfr": True, "video_passthrough": True,
+    })
+
+    meta = transcribe.transcribe_audio(audio, job, client=FakeClient())
+
+    assert meta["codec"] == "aac"
+    assert meta["container"] == "mp4"
+    assert meta["bitrate"] == 64000
+    assert meta["vbr"] is True
+    assert meta["vfr"] is True
+    assert meta["video_passthrough"] is True
+
+
 def test_transcribe_chunk_local_cleanup_even_on_failure(meeting_home, audio, monkeypatch):
     from meeting import paths
     paths.ensure_dirs()

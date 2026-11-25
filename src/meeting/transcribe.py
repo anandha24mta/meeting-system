@@ -272,6 +272,12 @@ def transcribe_audio(audio_path: Path, job: dict, client=None) -> dict:
         "status": "done",
         "transcribed_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "audio": job.get("audio"),
+        "codec": job.get("codec") or media.guess_codec(audio_path),
+        "container": job.get("container") or audio_path.suffix.lower().lstrip("."),
+        "bitrate": job.get("bitrate"),
+        "vbr": job.get("vbr", False),
+        "vfr": job.get("vfr", False),
+        "video_passthrough": job.get("video_passthrough", False),
     }
     header = (
         f"# Transkrip — {job['id']}\n\n"
