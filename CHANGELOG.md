@@ -21,6 +21,9 @@ mengikuti [Semantic Versioning](https://semver.org/).
   `video_passthrough` (additive, backward compatible)
 - Dukungan input `.mkv`
 
+### Diubah
+- Default model Gemini `gemini-2.5-flash` (`gemini-flash-latest` sudah 404)
+
 ### Catatan
 - VFR hanya berlaku untuk jalur passthrough source mp4/mkv, bukan rekaman
   audio-only (tidak ada video stream yang dihasilkan tool ini)

@@ -144,4 +144,4 @@ def _frames(cands: list[Path]) -> int:
 def _current_model() -> str:
     from . import config
 
-    return config.load().get("model", "gemini-flash-latest")
+    return config.load().get("model", "gemini-2.5-flash")
