@@ -10,7 +10,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import finalizer, indexmd, lock, paths
+from . import finalizer, indexmd, lock, paths, resources
 from .transcribe import TranscribeError, transcribe_audio  # nama di-import agar test dapat monkeypatch worker.transcribe_audio
 
 BACKOFF_SCHEDULE = (60.0, 300.0)  # 429: 60s lalu 5 menit, maks 2 retry
@@ -266,6 +266,7 @@ def run_once() -> bool:
 
 def main() -> int:
     paths.ensure_dirs()
+    resources.apply_thread_limits()
     try:
         reclaim_processing()  # owner mati/stale → pending lagi
         while run_once():

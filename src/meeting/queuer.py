@@ -11,7 +11,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import config, paths
+from . import paths, resources
 
 _ID_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
 _OWNER_STALE_SEC = 900.0
@@ -64,7 +64,11 @@ def active_workers() -> int:
 
 def spawn_worker(max_workers: int | None = None) -> None:
     """Spawn worker detached sampai batas konkurensi; sisanya habiskan antrean sendiri."""
-    limit = max(1, int(max_workers if max_workers is not None else config.load().get("max_workers", 4)))
+    limit = (
+        max(1, int(max_workers))
+        if max_workers is not None
+        else resources.plan()["max_workers"]
+    )
     active = active_workers()
     pending = len(list(paths.queue_dir("pending").glob("*.json")))
     to_spawn = max(0, min(limit, max(1, pending)) - active)

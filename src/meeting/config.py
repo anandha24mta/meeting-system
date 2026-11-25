@@ -7,7 +7,18 @@ import tempfile
 
 from . import paths
 
-DEFAULTS: dict = {"model": "gemini-flash-latest", "default_source": "mic", "mic_device": None}
+DEFAULTS: dict = {
+    "model": "gemini-flash-latest",
+    "default_source": "mic",
+    "mic_device": None,
+    "max_workers": 4,
+    "max_parallel_chunks": 2,
+    "per_job_memory_mb": 256,
+    "thread_cap": 2,
+    "flush_interval_sec": 5.0,
+    "gpu_mode": "auto",
+    "analysis_device": "cpu",
+}
 
 
 class ConfigError(RuntimeError):
