@@ -182,7 +182,7 @@ def test_run_once_finalizes_wav_before_transcribe(meeting_home, monkeypatch, tmp
     )
     worker.run_once()
 
-    assert calls and "recordings" in calls[0] and calls[0].endswith(".flac")
+    assert calls and "recordings" in calls[0] and calls[0].endswith(".m4a")
     assert not wav.exists()  # WAV dibersihkan setelah FLAC verify
     done_job = json.loads(
         list(paths.queue_dir("done").glob("*.json"))[0].read_text(encoding="utf-8")
@@ -298,6 +298,7 @@ def test_aac_opt_in_finalizes_to_m4a(meeting_home, monkeypatch):
         return dst
 
     monkeypatch.setattr(media, "encode_aac", fake_encode)
+    monkeypatch.setattr(media, "verify_audio", lambda *a, **kw: True)
     monkeypatch.setattr(worker, "transcribe_audio", FakeTranscriber())
     queuer.enqueue(make_job(id=job_id, wav=f"tmp/{wav.name}", needs_finalization=True))
     assert worker.run_once() is True

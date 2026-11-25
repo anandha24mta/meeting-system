@@ -6,25 +6,26 @@ Rekam meeting di Windows dan transkripsi otomatis via Gemini — semua hasil lok
 
     pip install -e .
     copy .env.example .env    # isi GEMINI_API_KEY (Google AI Studio)
-    winget install ffmpeg     # opsional — AAC/mp4/mkv & format eksotis
+    winget install ffmpeg     # direkomendasikan — default AAC/m4a & format eksotis
 
-Tanpa ffmpeg, `meeting record` tetap menghasilkan FLAC (perilaku bawaan).
-ffmpeg dipakai hanya saat AAC/container di-opt-in atau saat input butuh konversi.
+Default: WAV direkam lalu **langsung** di-encode sekali ke AAC-LC VBR di `.m4a`
+(tanpa perantara FLAC). Tanpa ffmpeg, finalizer otomatis jatuh ke FLAC dan
+rekaman tetap berhasil.
 
 ## Format
 
 Input didukung langsung: `mp4`, `mp3`, `m4a`, `flac`, `wav`, `webm`, `ogg`,
 `mkv`. Format lain dikonversi via ffmpeg bila terpasang.
 
-| Sumber | Default | Opt-in `audio_codec: aac` |
+| Sumber | Default | Opt-in `audio_codec: flac` |
 |---|---|---|
-| `meeting record` (audio-only) | FLAC 16 kHz | AAC-LC di `.m4a` (atau container pilihan) |
-| file `.m4a`/`.mp4`/`.mkv` | file asli dipakai apa adanya | remux: video `-c:v copy`, audio AAC-LC VBR |
+| `meeting record` (audio-only) | AAC-LC VBR di `.m4a`, langsung dari WAV | FLAC 16 kHz lossless |
+| file `.m4a`/`.mp4`/`.mkv` | remux: video `-c:v copy`, audio AAC-LC VBR | file asli dipakai apa adanya |
 | file audio lain | file asli dipakai apa adanya | FLAC/AAC sesuai opts |
 
 `config.json`:
 
-    "audio_codec": "flac" | "aac"     (default "flac")
+    "audio_codec": "aac" | "flac"     (default "aac")
     "container":   "auto" | "m4a" | "mp4" | "mkv"   (default "auto")
 
 `auto` = `.m4a` untuk rekaman audio-only, container sumber untuk input mp4/mkv.

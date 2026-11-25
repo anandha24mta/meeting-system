@@ -176,6 +176,7 @@ def test_transcribe_unsupported_with_ffmpeg_uses_which_path(meeting_home, tmp_pa
 
 
 def test_transcribe_default_without_ffmpeg_keeps_quiet(meeting_home, tmp_path, monkeypatch, capsys):
+    config.update(audio_codec="flac")
     monkeypatch.setattr(cli.shutil, "which", lambda name: None)
     monkeypatch.setattr(cli.queuer, "spawn_worker", lambda: None)
     src = tmp_path / "zoom.mp4"
@@ -283,6 +284,7 @@ def test_transcribe_audio_only_container_extracts_without_video(meeting_home, tm
 
 
 def test_transcribe_no_aac_opt_in_keeps_source_untouched(meeting_home, tmp_path, monkeypatch):
+    config.update(audio_codec="flac")
     monkeypatch.setattr(cli.queuer, "spawn_worker", lambda: None)
     cmds = []
     monkeypatch.setattr(cli.shutil, "which", lambda name: f"/usr/bin/{name}")

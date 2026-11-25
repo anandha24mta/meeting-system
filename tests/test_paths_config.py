@@ -34,7 +34,7 @@ def test_load_creates_default_on_first_run(meeting_home):
         "model": "gemini-flash-latest",
         "default_source": "mic",
         "mic_device": None,
-        "audio_codec": "flac",
+        "audio_codec": "aac",
         "container": "auto",
     }
     assert config_file_json_exists()

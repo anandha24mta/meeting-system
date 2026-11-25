@@ -11,7 +11,7 @@ DEFAULTS: dict = {
     "model": "gemini-flash-latest",
     "default_source": "mic",
     "mic_device": None,
-    "audio_codec": "flac",
+    "audio_codec": "aac",
     "container": "auto",
 }
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 import time
 from datetime import datetime
@@ -131,36 +132,36 @@ def process(job: dict, job_path: Path) -> None:
     """Satu job: finalisasi (bila perlu) → transkripsi (dengan retry 429) → done/failed."""
     if job.get("needs_finalization"):
         # wav bisa string (mic/sys) atau list (both)
+        raw = job["wav"]
+        wav_list = [raw] if isinstance(raw, str) else list(raw)
+        wavs = [
+            Path(w) if Path(w).is_absolute() else paths.home() / "data" / w
+            for w in wav_list
+        ]
+        cfg = config.load()
         try:
-            raw = job["wav"]
-            wav_list = [raw] if isinstance(raw, str) else list(raw)
-            wavs = [
-                Path(w) if Path(w).is_absolute() else paths.home() / "data" / w
-                for w in wav_list
-            ]
-            flac = finalizer.finalize(wavs, job["id"])
+            if media.wants_aac(cfg) and shutil.which("ffmpeg"):
+                # langsung WAV → m4a/AAC, tanpa FLAC perantara
+                try:
+                    out = media.encode_recording_aac(wavs, job["id"], cfg)
+                except Exception:
+                    out = finalizer.finalize(wavs, job["id"])  # fallback aman
+                    job["audio"] = str(out.relative_to(paths.home() / "data"))
+                else:
+                    channels = 2 if len(wavs) > 1 else 1
+                    job["audio"] = str(out.relative_to(paths.home() / "data"))
+                    job["codec"] = "aac"
+                    job["container"] = media.container_for(cfg)
+                    job["bitrate"] = media.aac_bitrate(channels)
+                    job["vbr"] = True
+                    job["vfr"] = False
+            else:
+                final = finalizer.finalize(wavs, job["id"])
+                job["audio"] = str(final.relative_to(paths.home() / "data"))
         except Exception as e:
             _fail_job(job, job_path, e)
             return
-        job["audio"] = str(flac.relative_to(paths.home() / "data"))
         job["needs_finalization"] = False
-
-        cfg = config.load()
-        if media.wants_aac(cfg):
-            container = media.container_for(cfg)
-            channels = 2 if isinstance(raw, list) and len(raw) > 1 else 1
-            out = flac.with_suffix(f".{container}")
-            try:
-                media.encode_aac(flac, out, channels)
-            except media.MediaError:
-                pass  # ffmpeg absence: FLAC tetap jadi hasil akhir
-            else:
-                job["audio"] = str(out.relative_to(paths.home() / "data"))
-                job["codec"] = "aac"
-                job["container"] = container
-                job["bitrate"] = media.aac_bitrate(channels)
-                job["vbr"] = True
-                flac.unlink(missing_ok=True)
 
     _upsert_index(job, "pending")
 

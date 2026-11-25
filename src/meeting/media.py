@@ -1,10 +1,13 @@
-"""ffmpeg-backed audio/container helpers. ffmpeg opsional; FLAC tetap default.
-Tak ada video capture hari ini — video hanya berasal dari file sumber dan di-copy."""
+"""ffmpeg-backed audio/container helpers. Default: WAV → AAC/m4a langsung.
+FLAC dipakai bila ffmpeg absen atau `audio_codec: flac`. Tak ada video capture
+hari ini — video hanya berasal dari file sumber dan di-copy."""
 from __future__ import annotations
 
 import shutil
 import subprocess
 from pathlib import Path
+
+from . import paths
 
 AUDIO_MIME = {
     ".mp3": "audio/mpeg",
@@ -189,6 +192,82 @@ def video_encode_argv(
     else:
         args += ["-c:v", "copy"]
     return [*args, str(dst)]
+
+
+def merge_wavs_to_temp(wavs: list[Path], out: Path, block: int = 1 << 16) -> Path:
+    """Merge mono WAVs ke satu WAV stereo per blok — RAM tidak sebanding durasi."""
+    import numpy as np
+    import soundfile as sf
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    readers = []
+    try:
+        for wav in wavs:
+            readers.append(sf.SoundFile(str(wav), mode="r"))
+        samplerate = readers[0].samplerate
+        with sf.SoundFile(
+            str(out), mode="w", samplerate=samplerate,
+            channels=len(readers), subtype="PCM_16",
+        ) as target:
+            while True:
+                blocks = [reader.read(block, dtype="float32") for reader in readers]
+                if not any(len(b) for b in blocks):
+                    break
+                n = max(len(b) for b in blocks)
+                merged = np.zeros((n, len(blocks)), dtype=np.float32)
+                for i, b in enumerate(blocks):
+                    if b.ndim > 1:
+                        b = b.mean(axis=1)
+                    merged[: len(b), i] = b
+                target.write(merged)
+    finally:
+        for reader in readers:
+            reader.close()
+    return out
+
+
+def verify_audio(path: Path | str, *, ffmpeg: str | None = None) -> bool:
+    """Decode penuh sebelum WAV sumber dihapus."""
+    ffmpeg = ffmpeg or shutil.which("ffmpeg")
+    if not ffmpeg:
+        return False
+    try:
+        result = subprocess.run(
+            [ffmpeg, "-hide_banner", "-v", "error", "-i", str(path), "-f", "null", "-"],
+            capture_output=True, timeout=300,
+        )
+    except Exception:
+        return False
+    return result.returncode == 0 and Path(path).exists()
+
+
+def encode_recording_aac(wavs: list[Path], out_stem: str, cfg: dict) -> Path:
+    """WAV → m4a/AAC langsung (tanpa perantara FLAC), verify lalu hapus WAV."""
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise MediaError("ffmpeg tidak ditemukan — install dengan: winget install ffmpeg")
+    container = container_for(cfg)
+    out = paths.recordings_dir() / f"{out_stem}.{container}"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    channels = 2 if len(wavs) > 1 else 1
+    merged: Path | None = None
+    src = wavs[0]
+    if len(wavs) > 1:
+        merged = paths.tmp_dir() / f"{out_stem}_merged.wav"
+        src = merge_wavs_to_temp(wavs, merged)
+    try:
+        encode_aac(src, out, channels, ffmpeg=ffmpeg)
+        if not verify_audio(out, ffmpeg=ffmpeg):
+            raise MediaError(f"output AAC gagal verify: {out.name}")
+    except Exception:
+        out.unlink(missing_ok=True)
+        raise
+    finally:
+        if merged is not None:
+            merged.unlink(missing_ok=True)
+    for wav in wavs:
+        wav.unlink(missing_ok=True)
+    return out
 
 
 def encode_aac(

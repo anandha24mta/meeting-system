@@ -7,10 +7,11 @@ mengikuti [Semantic Versioning](https://semver.org/).
 ## [0.3.0] - 2026-11-25
 
 ### Ditambahkan
-- Opsi `audio_codec: aac` + `container: auto|m4a|mp4|mkv` di `config.json`.
-  Default tetap `flac`/`auto` — rekaman audio-only tidak berubah
+- Opsi `audio_codec: aac|flac` + `container: auto|m4a|mp4|mkv` di `config.json`.
+  Default `aac`/`auto` — rekaman audio-only langsung jadi `.m4a`
 - Encoder AAC-LC via ffmpeg (`-q:a` native, `-vbr` bila `libfdk_aac` ada),
-  target ~64 kbps mono / ~128 kbps stereo
+  target ~64 kbps mono / ~128 kbps stereo. WAV sumber di-encode **sekali**
+  (tanpa FLAC perantara), diverifikasi decode penuh sebelum WAV dihapus
 - Passthrough video untuk input mp4/mkv saat AAC di-opt-in: `-c:v copy`
   (video byte-identical, VFR tetap utuh), tanpa re-encode dan tanpa video capture
 - Preflight ffmpeg di CLI dengan pesan `winget install ffmpeg`; fallback ke FLAC
