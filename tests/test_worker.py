@@ -280,6 +280,32 @@ def test_reclaim_processing_noop_when_clean(meeting_home):
     assert worker.reclaim_processing() == 0
 
 
+def test_gc_runs_after_each_job(meeting_home, flac, monkeypatch):
+    from meeting import paths
+
+    paths.ensure_dirs()
+    monkeypatch.setattr(worker, "transcribe_audio", FakeTranscriber())
+    calls = []
+    monkeypatch.setattr(worker.gc, "collect", lambda: calls.append(1))
+
+    queuer.enqueue(make_job(id="gc-1"))
+    queuer.enqueue(make_job(id="gc-2"))
+    assert worker.main() == 0
+    assert len(calls) >= 2
+
+
+def test_main_exits_idle_without_leftover_owners(meeting_home, flac, monkeypatch):
+    from meeting import paths
+
+    paths.ensure_dirs()
+    monkeypatch.setattr(worker, "transcribe_audio", FakeTranscriber())
+    queuer.enqueue(make_job(id="idle-1"))
+    assert worker.main() == 0
+    assert not list(paths.queue_dir("pending").glob("*.processing"))
+    assert not list(paths.queue_dir("pending").glob("*.owner"))
+    assert not list(paths.queue_dir("pending").glob("*.json"))
+
+
 def test_main_clears_last_error_on_success(meeting_home, flac, monkeypatch):
     """main() sukses (antrian habis) → worker.last_error dihapus: `meeting
     status` tak melaporkan 'API key invalid' lama setelah key diperbaiki."""

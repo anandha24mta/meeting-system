@@ -2,6 +2,7 @@
 Di-spawn detached oleh queuer; exit saat antrian kosong — tidak ada proses menetap."""
 from __future__ import annotations
 
+import gc
 import json
 import os
 import sys
@@ -261,6 +262,8 @@ def run_once() -> bool:
         time.sleep(1.0)  # jangan tight-loop: error persisten ≠ spin CPU/log tanpa batas
     else:
         stop_heartbeat()
+    finally:
+        gc.collect()  # lepas array audio antar job — RSS tidak naik seiring antrean
     return True
 
 
