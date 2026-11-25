@@ -16,6 +16,7 @@ mengikuti [Semantic Versioning](https://semver.org/).
   (video byte-identical, VFR tetap utuh), tanpa re-encode dan tanpa video capture
 - Preflight ffmpeg di CLI dengan pesan `winget install ffmpeg`; fallback ke FLAC
   bila ffmpeg tidak ada
+- Pemulihan sesi yatim juga menghasilkan `.m4a` langsung dari WAV (bukan FLAC)
 - Field baru di `meta.json`: `codec`, `container`, `bitrate`, `vbr`, `vfr`,
   `video_passthrough` (additive, backward compatible)
 - Dukungan input `.mkv`
