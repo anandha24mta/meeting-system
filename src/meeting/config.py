@@ -8,7 +8,7 @@ import tempfile
 from . import paths
 
 DEFAULTS: dict = {
-    "model": "gemini-flash-latest",
+    "model": "gemini-2.5-flash",
     "default_source": "mic",
     "mic_device": None,
     "max_workers": 4,

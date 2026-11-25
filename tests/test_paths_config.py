@@ -31,7 +31,7 @@ from meeting import config
 def test_load_creates_default_on_first_run(meeting_home):
     cfg = config.load()
     for key, value in {
-        "model": "gemini-flash-latest",
+        "model": "gemini-2.5-flash",
         "default_source": "mic",
         "mic_device": None,
         "max_workers": 4,

@@ -17,6 +17,7 @@ mengikuti [Semantic Versioning](https://semver.org/).
   bersamaan tanpa mengambil alih job yang masih aktif
 
 ### Diubah
+- Default model Gemini `gemini-2.5-flash` (`gemini-flash-latest` sudah 404)
 - Worker tidak lagi memakai lock global: jumlah worker dibatasi oleh CPU/RAM
   dan kedalaman antrean, lalu exit saat antrean habis
 - Potongan audio panjang ditranskripsi paralel (default 2) dengan hasil tetap
