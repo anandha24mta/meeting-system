@@ -2,6 +2,7 @@
 Modul ini belum dipakai caller mana pun — landasan refactor murni."""
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -20,6 +21,20 @@ OPUS_BITRATES = {
     "balanced": (32, 64),
     "compact": (24, 48),
 }
+
+CPU_THREADS = 2
+_CPU_ENV = {
+    "OMP_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+}
+
+
+def cpu_env() -> dict[str, str]:
+    """Environment lengkap dgn thread BLAS/OMP di-1 — CPU-only, tanpa GPU."""
+    env = os.environ.copy()
+    env.update(_CPU_ENV)
+    return env
 
 
 class CodecError(RuntimeError):
@@ -77,18 +92,19 @@ def build_opus_argv(
     bitrate_kbps: int,
     channels: int,
     samplerate: int = 16000,
+    threads: int = CPU_THREADS,
 ) -> list[str]:
     """Argv ffmpeg: input file dibaca langsung (streaming, runtime memory bounded).
 
     VBR + application voip = prioritas ucapan; compression_level 10 = kualitas
-    terbaik di libopus (!= kecepatan encode, masih CPU murni)."""
+    terbaik di libopus. -hwaccel none + -threads 2 = CPU-only eksplisit."""
     return [
         ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-nostdin",
-        "-i", str(src),
+        "-hwaccel", "none", "-i", str(src),
         "-map", "0:a:0", "-vn", "-c:a", "libopus",
         "-vbr", "on", "-application", "voip", "-compression_level", "10",
         "-b:a", f"{bitrate_kbps}k", "-ac", str(channels), "-ar", str(samplerate),
-        str(out),
+        "-threads", str(threads), str(out),
     ]
 
 
@@ -109,12 +125,12 @@ def encode_opus(
         ffmpeg, src, out,
         bitrate_kbps=bitrate_kbps, channels=channels, samplerate=samplerate,
     )
-    r = subprocess.run(argv, capture_output=True)
+    r = subprocess.run(argv, capture_output=True, env=cpu_env())
     if r.returncode != 0:
         raise CodecError(f"ffmpeg gagal meng-encode Opus: {Path(src).name}")
-    if not out.exists():
-        raise CodecError(f"ffmpeg tidak menghasilkan output: {out.name}")
-    return out
+    if not Path(out).exists():
+        raise CodecError(f"ffmpeg tidak menghasilkan output: {Path(out).name}")
+    return Path(out)
 
 
 def decode_ok(path: Path, *, timeout: int = 120) -> bool:
@@ -123,11 +139,11 @@ def decode_ok(path: Path, *, timeout: int = 120) -> bool:
     if not ffmpeg:
         return False
     argv = [
-        ffmpeg, "-hide_banner", "-v", "error", "-i", str(path),
-        "-f", "null", "-",
+        ffmpeg, "-hide_banner", "-v", "error", "-hwaccel", "none", "-i", str(path),
+        "-threads", str(CPU_THREADS), "-f", "null", "-",
     ]
     try:
-        r = subprocess.run(argv, capture_output=True, timeout=timeout)
+        r = subprocess.run(argv, capture_output=True, timeout=timeout, env=cpu_env())
     except Exception:
         return False
     return r.returncode == 0

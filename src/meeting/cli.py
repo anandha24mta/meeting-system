@@ -11,7 +11,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import config, devices, indexmd, paths, queuer, recorder, recover, session
+from . import codecs, config, devices, indexmd, paths, queuer, recorder, recover, session
 
 SUPPORTED_AUDIO = {".mp4", ".mp3", ".m4a", ".flac", ".wav", ".webm", ".ogg"}
 
@@ -152,8 +152,9 @@ def cmd_transcribe(args) -> int:
         paths.ensure_dirs()
         out = paths.tmp_dir() / f"{job_id}{ext}.flac"
         rc = subprocess.run(
-            [ffmpeg, "-y", "-i", str(src), "-ac", "1", "-ar", "16000", str(out)],
-            capture_output=True,
+            [ffmpeg, "-y", "-hwaccel", "none", "-i", str(src),
+             "-ac", "1", "-ar", "16000", "-threads", str(codecs.CPU_THREADS), str(out)],
+            capture_output=True, env=codecs.cpu_env(),
         )
         if rc.returncode != 0 or not out.exists():
             _eprint(f"ffmpeg gagal mengonversi {src.name}")

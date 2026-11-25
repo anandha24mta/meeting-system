@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 import pytest
 import soundfile as sf
@@ -116,3 +118,36 @@ def test_decode_ok_false_on_failure_or_missing_ffmpeg(monkeypatch):
     assert codecs.decode_ok("out.opus") is False
     monkeypatch.setattr(codecs, "ffmpeg_bin", lambda: None)
     assert codecs.decode_ok("out.opus") is False
+
+
+def test_opus_argv_disables_hwaccel_and_caps_threads():
+    argv = codecs.build_opus_argv(
+        "/usr/bin/ffmpeg", "in.wav", "out.opus", bitrate_kbps=32, channels=1
+    )
+    assert argv[argv.index("-hwaccel") + 1] == "none"
+    assert argv.index("-hwaccel") < argv.index("-i")  # opsi input sebelum -i
+    assert argv[argv.index("-threads") + 1] == "2"
+    joined = " ".join(argv).lower()
+    assert "cuda" not in joined and "nvenc" not in joined and "qsv" not in joined
+
+
+def test_cpu_env_caps_blas_threads():
+    env = codecs.cpu_env()
+    for key in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
+        assert env[key] == "1"
+    assert "PATH" in env  # env lengkap, aman diteruskan ke subprocess
+
+
+def test_encode_and_decode_pass_cpu_env(monkeypatch):
+    seen = []
+    monkeypatch.setattr(codecs, "ffmpeg_bin", lambda: "/usr/bin/ffmpeg")
+
+    def fake_run(argv, **kw):
+        seen.append(kw.get("env", {}))
+        Path(argv[-1]).write_bytes(b"opus")
+        return type("R", (), {"returncode": 0})()
+
+    monkeypatch.setattr(codecs.subprocess, "run", fake_run)
+    codecs.encode_opus("in.wav", "out.opus", bitrate_kbps=32, channels=1)
+    assert seen[0]["OPENBLAS_NUM_THREADS"] == "1"
+

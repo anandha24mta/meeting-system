@@ -8,7 +8,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import config, indexmd, paths
+from . import codecs, config, indexmd, paths
 
 _AUDIO_MIME = {
     ".mp4": "audio/mp4", ".m4a": "audio/mp4", ".webm": "audio/webm",
@@ -161,9 +161,10 @@ def _split_ffmpeg(audio_path: Path, offsets: list[tuple[float, float]], job_id: 
     for i, (start, length) in enumerate(offsets):
         out = paths.tmp_dir() / f"{job_id}_chunk{i}.flac"
         rc = subprocess.run(
-            [ffmpeg, "-y", "-ss", str(start), "-i", str(audio_path), "-t", str(length),
-             "-ac", "1", "-ar", "16000", str(out)],
-            capture_output=True,
+            [ffmpeg, "-y", "-hwaccel", "none", "-ss", str(start), "-i", str(audio_path),
+             "-t", str(length), "-ac", "1", "-ar", "16000",
+             "-threads", str(codecs.CPU_THREADS), str(out)],
+            capture_output=True, env=codecs.cpu_env(),
         )
         if rc.returncode != 0 or not out.exists():
             for p in out_paths:
