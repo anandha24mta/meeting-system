@@ -81,3 +81,16 @@ def test_finalize_keeps_wav_on_error(meeting_home, wav_mono):
 def test_finalize_rejects_empty_list(meeting_home):
     with pytest.raises(finalizer.FinalizeError):
         finalizer.finalize([], "x")
+
+
+def test_finalize_streams_instead_of_reading_whole_file(meeting_home, wav_mono, monkeypatch):
+    from meeting import paths
+
+    paths.ensure_dirs()
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("sf.read would load the whole meeting into RAM")
+
+    monkeypatch.setattr(sf, "read", forbidden)
+    out = finalizer.finalize([wav_mono], "streamed")
+    assert sf.info(out).frames == 16000

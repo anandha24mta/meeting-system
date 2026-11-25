@@ -315,6 +315,21 @@ def test_transcribe_fails_clearly_on_silent_audio_without_calling_gemini(
     assert client.files.uploaded == []  # tidak pernah upload sama sekali
 
 
+def test_streaming_analysis_never_reads_whole_file(meeting_home, audio, monkeypatch):
+    import soundfile as sf
+    from meeting import paths
+
+    paths.ensure_dirs()
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("sf.read would load the whole meeting into RAM")
+
+    monkeypatch.setattr(sf, "read", forbidden)
+    assert transcribe._is_silent(audio) is False
+    chunks = transcribe._split_soundfile(audio, [(0.0, 0.25), (0.25, 0.25)], "stream")
+    assert [sf.info(c).frames for c in chunks] == [4000, 4000]
+
+
 def test_transcribe_chunk_local_cleanup_even_on_failure(meeting_home, audio, monkeypatch):
     from meeting import paths
     paths.ensure_dirs()

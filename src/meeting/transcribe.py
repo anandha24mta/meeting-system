@@ -137,16 +137,44 @@ def _chunk_offsets(duration: float) -> list[tuple[float, float]]:
     return [(i * size, size) for i in range(n)]
 
 
+ANALYSIS_BLOCK_FRAMES = 8192
+
+
+def _iter_audio_blocks(audio_path: Path):
+    """Yield bounded float32 blocks; never loads a whole meeting into RAM."""
+    import soundfile as sf
+
+    with sf.SoundFile(str(audio_path), mode="r") as handle:
+        while True:
+            block = handle.read(ANALYSIS_BLOCK_FRAMES, dtype="float32")
+            if len(block) == 0:
+                return
+            yield block
+
+
 def _split_soundfile(audio_path: Path, offsets: list[tuple[float, float]], job_id: str) -> list[Path]:
     import soundfile as sf
 
     sr = sf.info(str(audio_path)).samplerate
     out_paths: list[Path] = []
-    for i, (start, length) in enumerate(offsets):
-        data, _ = sf.read(str(audio_path), start=int(start * sr), frames=int(round(length * sr)))
-        out = paths.tmp_dir() / f"{job_id}_chunk{i}.flac"
-        sf.write(str(out), data, sr, format="FLAC")
-        out_paths.append(out)
+    with sf.SoundFile(str(audio_path), mode="r") as source:
+        for i, (start, length) in enumerate(offsets):
+            source.seek(int(start * sr))
+            remaining = int(round(length * sr))
+            out = paths.tmp_dir() / f"{job_id}_chunk{i}.flac"
+            with sf.SoundFile(
+                str(out), mode="w", samplerate=sr, channels=1,
+                subtype="PCM_16", format="FLAC",
+            ) as target:
+                while remaining > 0:
+                    block = source.read(min(ANALYSIS_BLOCK_FRAMES, remaining), dtype="float32")
+                    if len(block) == 0:
+                        break
+                    if block.ndim > 1:
+                        block = block.mean(axis=1)
+                    target.write(block)
+                    remaining -= len(block)
+            out_paths.append(out)
     return out_paths
 
 
@@ -188,6 +216,22 @@ def _prepare_chunks(audio_path: Path, job_id: str) -> list[tuple[Path, float]]:
     return [(cp, start) for cp, (start, _length) in zip(chunk_paths, offsets)]
 
 
+def _rms(audio_path: Path) -> float:
+    """RMS over streamed blocks; peak RAM is one block, not the whole file."""
+    import numpy as np
+
+    total = 0.0
+    count = 0
+    for block in _iter_audio_blocks(audio_path):
+        if block.ndim > 1:
+            block = block.mean(axis=1)
+        total += float(np.sum(np.square(block, dtype=np.float32), dtype=np.float64))
+        count += len(block)
+    if count == 0:
+        return 0.0
+    return float(np.sqrt(total / count))
+
+
 def _is_silent(audio_path: Path) -> bool:
     """True bila audio (yg soundfile bisa baca) nyaris hening total sepanjang
     durasinya. File yg soundfile tak bisa baca (mp4/mp3 mentah dll) tidak dicek —
@@ -195,12 +239,7 @@ def _is_silent(audio_path: Path) -> bool:
     if audio_path.suffix.lower() not in _SOUNDFILE_EXTS:
         return False
     try:
-        import numpy as np
-        import soundfile as sf
-        data, _sr = sf.read(str(audio_path), dtype="float32", always_2d=False)
-        if data.size == 0:
-            return True
-        return float(np.sqrt(np.mean(np.square(data)))) < SILENCE_RMS_THRESHOLD
+        return _rms(audio_path) < SILENCE_RMS_THRESHOLD
     except Exception:
         return False
 
