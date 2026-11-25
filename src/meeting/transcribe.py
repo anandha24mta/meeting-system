@@ -13,7 +13,7 @@ from . import config, indexmd, paths
 _AUDIO_MIME = {
     ".mp4": "audio/mp4", ".m4a": "audio/mp4", ".webm": "audio/webm",
     ".mp3": "audio/mpeg", ".ogg": "audio/ogg", ".flac": "audio/flac",
-    ".wav": "audio/wav",
+    ".wav": "audio/wav", ".opus": "audio/ogg",
 }
 
 TRANSCRIPT_PROMPT = (

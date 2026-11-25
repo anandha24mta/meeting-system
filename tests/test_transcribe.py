@@ -184,6 +184,20 @@ def test_transcribe_no_override_when_real_video_present(meeting_home, tmp_path, 
     assert client.files.upload_configs[0] is None
 
 
+def test_transcribe_overrides_mime_for_opus_output(meeting_home, tmp_path, monkeypatch):
+    """Output Opus finalizer harus di-override ke audio/ogg (bukan video/*)."""
+    from meeting import paths
+    paths.ensure_dirs()
+    audio = tmp_path / "hasil.opus"
+    audio.write_bytes(b"fake")
+    monkeypatch.setattr(transcribe.shutil, "which", lambda name: "/usr/bin/ffprobe")
+    monkeypatch.setattr(transcribe.subprocess, "run", _fake_ffprobe_run(""))
+
+    client = FakeClient()
+    transcribe.transcribe_audio(audio, make_job(), client=client)
+    assert client.files.upload_configs[0] == {"mime_type": "audio/ogg"}
+
+
 def test_transcribe_no_override_when_ffprobe_missing(meeting_home, tmp_path, monkeypatch):
     from meeting import paths
     paths.ensure_dirs()
