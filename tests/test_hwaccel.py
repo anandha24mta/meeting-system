@@ -1,6 +1,6 @@
-import json
+import time
 
-from meeting import hwaccel, paths
+from meeting import hwaccel
 
 
 def test_probe_caches_result(meeting_home, monkeypatch):
@@ -9,7 +9,7 @@ def test_probe_caches_result(meeting_home, monkeypatch):
     def fake_probe():
         calls.append(1)
         return {"kind": "qsv", "available": True, "opencl_installed": False,
-                "devices": ["Intel(R) UHD Graphics"], "checked_at": 1.0}
+                "devices": ["Intel(R) UHD Graphics"], "checked_at": time.time()}
 
     monkeypatch.setattr(hwaccel, "_probe", fake_probe)
     first = hwaccel.probe()
@@ -41,7 +41,7 @@ def test_probe_does_not_import_gpu_modules(meeting_home, monkeypatch):
     before = set(sys.modules)
     monkeypatch.setattr(hwaccel, "_probe", lambda: {
         "kind": "none", "available": False, "opencl_installed": False,
-        "devices": [], "checked_at": 1.0,
+        "devices": [], "checked_at": time.time(),
     })
     hwaccel.probe()
     introduced = {name for name in set(sys.modules) - before
