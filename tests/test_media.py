@@ -93,3 +93,32 @@ def test_container_for_explicit_choice_and_bad_value():
     assert media.container_for({"container": "m4a"}, source_ext=".mp4") == "m4a"
     with pytest.raises(media.MediaError, match="container tidak dikenal"):
         media.container_for({"container": "avi"})
+
+
+def test_passthrough_argv_copies_video_without_reencode():
+    argv = media.passthrough_argv("in.mp4", "out.mp4", video=True, encoders=set())
+    assert argv[:2] == ["-y", "-i"]
+    assert argv[argv.index("-c:v") + 1] == "copy"
+    assert "-vn" not in argv
+    assert argv[argv.index("-c:a") + 1] == "aac"
+    assert not any(f in argv for f in ("-crf", "-r", "-b:v", "-fps_mode"))
+    assert argv[-1] == "out.mp4"
+
+
+def test_passthrough_argv_extracts_audio_only_when_no_video():
+    argv = media.passthrough_argv("in.mkv", "out.m4a", video=False, encoders=set())
+    assert "-vn" in argv
+    assert "-c:v" not in argv
+    assert argv[argv.index("-c:a") + 1] == "aac"
+
+
+def test_probe_video_reads_ffprobe_stream_list(monkeypatch):
+    out = type("R", (), {"stdout": "video\n"})()
+    assert media.probe_video("in.mp4", ffprobe="ffprobe", run=lambda *a, **k: out) is True
+    out.stdout = ""
+    assert media.probe_video("in.mp4", ffprobe="ffprobe", run=lambda *a, **k: out) is False
+
+
+def test_probe_video_without_ffprobe_is_false(monkeypatch):
+    monkeypatch.setattr(media.shutil, "which", lambda name: None)
+    assert media.probe_video("in.mp4") is False

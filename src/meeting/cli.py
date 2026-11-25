@@ -11,7 +11,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from . import config, devices, indexmd, paths, queuer, recorder, recover, session
+from . import config, devices, indexmd, media, paths, queuer, recorder, recover, session
 
 SUPPORTED_AUDIO = {".mp4", ".mp3", ".m4a", ".flac", ".wav", ".webm", ".ogg"}
 
@@ -127,6 +127,35 @@ def _meta_from_disk(job_id: str, source: str) -> dict:
     return {"duration_sec": dur, "wav_paths": wavs, "device": "unknown", "device_lost": False}
 
 
+def _aac_passthrough(src: Path, job_id: str, ext: str, cfg: dict) -> tuple[str, dict]:
+    """Opt-in AAC: remux dgn video copy (VFR utuh) atau ekstrak audio saja."""
+    if not (media.wants_aac(cfg) and ext in media.VIDEO_SOURCE_EXTS):
+        return "", {}
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return "", {}
+    container = media.container_for(cfg, source_ext=ext)
+    has_video = media.probe_video(
+        src, ffprobe=shutil.which("ffprobe"), run=subprocess.run
+    )
+    copy_video = has_video and container != "m4a"
+    paths.ensure_dirs()
+    out = paths.tmp_dir() / f"{job_id}_passthrough.{container}"
+    argv = media.passthrough_argv(src, out, video=copy_video)
+    rc = subprocess.run([ffmpeg, *argv], capture_output=True)
+    if rc.returncode != 0 or not out.exists():
+        out.unlink(missing_ok=True)
+        return "", {}
+    return str(out.resolve()), {
+        "codec": "aac",
+        "container": container,
+        "bitrate": media.aac_bitrate(1),
+        "vbr": True,
+        "vfr": copy_video,
+        "video_passthrough": copy_video,
+    }
+
+
 def cmd_transcribe(args) -> int:
     src = Path(args.file)
     if not src.exists():
@@ -141,24 +170,32 @@ def cmd_transcribe(args) -> int:
         return 1
     audio_rel: str
     needs_fin = False
+    media_meta: dict = {}
 
     if ext in SUPPORTED_AUDIO:
         audio_rel = str(src.resolve())  # absolut; file asli tak pernah diubah
+        passthrough_rel, media_meta = _aac_passthrough(src, job_id, ext, cfg)
+        if media_meta:
+            audio_rel = passthrough_rel
     else:
-        ffmpeg = shutil.which("ffmpeg")
-        if not ffmpeg:
-            _eprint("Format ini butuh ffmpeg — install dengan: winget install ffmpeg")
-            return 1
-        paths.ensure_dirs()
-        out = paths.tmp_dir() / f"{job_id}{ext}.flac"
-        rc = subprocess.run(
-            [ffmpeg, "-y", "-i", str(src), "-ac", "1", "-ar", "16000", str(out)],
-            capture_output=True,
-        )
-        if rc.returncode != 0 or not out.exists():
-            _eprint(f"ffmpeg gagal mengonversi {src.name}")
-            return 1
-        audio_rel = str(out.resolve())
+        passthrough_rel, media_meta = _aac_passthrough(src, job_id, ext, cfg)
+        if media_meta:
+            audio_rel = passthrough_rel
+        else:
+            ffmpeg = shutil.which("ffmpeg")
+            if not ffmpeg:
+                _eprint("Format ini butuh ffmpeg — install dengan: winget install ffmpeg")
+                return 1
+            paths.ensure_dirs()
+            out = paths.tmp_dir() / f"{job_id}{ext}.flac"
+            rc = subprocess.run(
+                [ffmpeg, "-y", "-i", str(src), "-ac", "1", "-ar", "16000", str(out)],
+                capture_output=True,
+            )
+            if rc.returncode != 0 or not out.exists():
+                _eprint(f"ffmpeg gagal mengonversi {src.name}")
+                return 1
+            audio_rel = str(out.resolve())
 
     job = {
         "id": job_id,
@@ -172,6 +209,7 @@ def cmd_transcribe(args) -> int:
         "device": None,
         "model": cfg["model"],
         "status": "pending",
+        **media_meta,
     }
     queuer.enqueue(job)
     # id final bisa ber-suffix (tabrakan menit-yang-sama) — pakai job["id"]

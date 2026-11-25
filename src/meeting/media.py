@@ -19,6 +19,7 @@ AUDIO_MIME = {
 VIDEO_MIME = {".mkv": "video/x-matroska"}
 
 CONTAINERS = ("auto", "m4a", "mp4", "mkv")
+VIDEO_SOURCE_EXTS = (".mp4", ".mkv")
 NATIVE_Q = {1: "0.5", 2: "1.0"}
 FDK_VBR = {1: "3", 2: "4"}
 BITRATE_TARGET = {1: 64000, 2: 128000}
@@ -91,6 +92,36 @@ def aac_output_argv(
         "-y", "-i", str(src), "-vn", *aac_vbr_args(channels, encoders),
         "-ac", str(channels), "-ar", str(sample_rate), str(dst),
     ]
+
+
+def passthrough_argv(
+    src: Path | str, dst: Path | str, *, channels: int = 1,
+    encoders: set[str] | None = None, video: bool = True,
+) -> list[str]:
+    """Video stream copy (byte-identical, VFR utuh) atau ekstrak audio saja."""
+    args = ["-y", "-i", str(src)]
+    if video:
+        args += ["-map", "0:v:0?", "-map", "0:a:0?", "-c:v", "copy"]
+    else:
+        args += ["-vn"]
+    args += [*aac_vbr_args(channels, encoders), "-ac", str(channels), str(dst)]
+    return args
+
+
+def probe_video(path: Path | str, *, ffprobe: str | None = None, run=None) -> bool:
+    ffprobe = ffprobe or shutil.which("ffprobe")
+    if not ffprobe:
+        return False
+    run = run or subprocess.run
+    try:
+        out = run(
+            [ffprobe, "-v", "error", "-select_streams", "v", "-show_entries",
+             "stream=codec_type", "-of", "csv=p=0", str(path)],
+            capture_output=True, text=True, timeout=30,
+        )
+    except Exception:
+        return False
+    return bool(out.stdout.strip())
 
 
 def encode_aac(
