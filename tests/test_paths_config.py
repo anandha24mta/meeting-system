@@ -43,8 +43,8 @@ def config_file_json_exists():
 
 def test_audio_quality_keys_are_additive_defaults(meeting_home):
     cfg = config.load()
-    assert cfg["codec"] == "flac"
-    assert cfg["quality"] == "archive"
+    assert cfg["codec"] == "opus"
+    assert cfg["quality"] == "balanced"
     assert cfg["sample_rate"] == 16000
     assert cfg["channels"] == "auto"
     assert config.QUALITY_CHOICES == ("archive", "best", "balanced", "compact")
@@ -60,7 +60,7 @@ def test_old_config_without_audio_keys_still_loads(meeting_home):
     cfg = config.load()
     assert cfg["model"] == "gemini-2.5-pro"
     assert cfg["default_source"] == "sys"
-    assert cfg["codec"] == "flac"  # key baru terisi default, config lama tetap valid
+    assert cfg["codec"] == "opus"  # config lama tetap valid, key baru terisi default
 
 
 def test_load_merges_file_over_defaults(meeting_home):

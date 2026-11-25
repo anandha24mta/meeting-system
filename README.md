@@ -22,11 +22,13 @@ Hasil: `data/output/<id>/transcript.md` + `INDEX.md`. Audio final di `data/recor
 
 ## Kualitas audio (CPU-only)
 
-Default `archive` = FLAC lossless 16 kHz — perilaku lama tidak berubah. Untuk file
-lebih kecil, set di `config.json`:
+Default: Opus VBR `balanced` (32 kbps mono / 64 kbps stereo, `voip`,
+`compression_level 10`) — langsung dari WAV tanpa perantara FLAC, ≈4× lebih kecil
+dari FLAC untuk ucapan 16 kHz. Kualitas maksimum: `quality: "best"` (64/128 kbps).
+Lossless tetap tersedia lewat:
 
-    "codec": "opus",
-    "quality": "balanced",       # best | balanced | compact
+    "codec": "flac",
+    "quality": "archive"
 
 | quality  | bitrate mono/stereo | ≈ MB/jam mono/stereo |
 | archive  | FLAC lossless       | ~55 / ~110           |

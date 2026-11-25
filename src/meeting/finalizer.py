@@ -31,8 +31,11 @@ def _read_16k_mono(wav: Path) -> np.ndarray:
 
 
 def _uses_opus(cfg: dict) -> bool:
-    """Opus hanya saat config MEMILIH codec=opus + quality lossy; default tetap FLAC."""
-    return cfg.get("codec") == "opus" and cfg.get("quality") in codecs.OPUS_BITRATES
+    """Default lossy: codec=opus dan quality lossy; archive tetap FLAC lossless."""
+    return (
+        cfg.get("codec", "opus") == "opus"
+        and cfg.get("quality", "balanced") in codecs.OPUS_BITRATES
+    )
 
 
 def _merge_to_temp_wav(wavs: list[Path], out: Path, chunk: int = 1 << 16) -> None:

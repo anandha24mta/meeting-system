@@ -21,13 +21,26 @@ def wav_mono(meeting_home, tmp_path):
 def test_finalize_mono_produces_flac(meeting_home, wav_mono):
     from meeting import paths
     paths.ensure_dirs()
-    out = finalizer.finalize([wav_mono], "2026-08-29_1400")
+    cfg = {"codec": "flac", "quality": "archive"}
+    out = finalizer.finalize([wav_mono], "2026-08-29_1400", cfg)
     assert out == paths.recordings_dir() / "2026-08-29_1400.flac"
     assert out.exists()
     info = sf.info(out)
     assert info.samplerate == 16000
     assert info.channels == 1
     assert info.format == "FLAC"
+
+
+def test_finalize_mono_defaults_to_opus(meeting_home, wav_mono, monkeypatch):
+    from meeting import paths
+
+    paths.ensure_dirs()
+    from meeting import codecs
+
+    monkeypatch.setattr(codecs, "decode_ok", lambda p: True)
+    out = finalizer.finalize([wav_mono], "default-opus")
+    assert out == paths.recordings_dir() / "default-opus.opus"
+    assert out.exists()
 
 
 def test_finalize_deletes_wav_after_verify(meeting_home, wav_mono):
@@ -48,7 +61,8 @@ def test_finalize_two_wavs_makes_stereo(meeting_home, tmp_path):
     sf.write(w1, left, sr, subtype="PCM_16")
     sf.write(w2, right, sr, subtype="PCM_16")
 
-    out = finalizer.finalize([w1, w2], "2026-08-29_1500")
+    cfg = {"codec": "flac", "quality": "archive", "channels": "auto"}
+    out = finalizer.finalize([w1, w2], "2026-08-29_1500", cfg)
     data, sr_out = sf.read(out)
     assert sr_out == 16000
     assert data.ndim == 2 and data.shape[1] == 2
@@ -124,13 +138,16 @@ def test_opus_profile_produces_opus_and_deletes_wav(meeting_home, wav_mono, monk
     assert not wav_mono.exists()
 
 
-def test_flac_stays_default_even_when_quality_set(meeting_home, wav_mono):
-    from meeting import config, paths
+def test_opus_is_default_even_when_codec_absent(meeting_home, wav_mono, monkeypatch):
+    from meeting import codecs, config, paths
+
     paths.ensure_dirs()
     cfg = config.load()
-    cfg.update(quality="best")  # codec tidak diset → tetap FLAC
-    out = finalizer.finalize([wav_mono], "still-flac", cfg)
-    assert out.suffix == ".flac"
+    cfg.pop("codec", None)
+    cfg["quality"] = "best"
+    monkeypatch.setattr(codecs, "decode_ok", lambda p: True)
+    out = finalizer.finalize([wav_mono], "still-opus", cfg)
+    assert out.suffix == ".opus"
     assert out.exists()
 
 

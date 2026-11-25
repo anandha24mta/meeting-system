@@ -14,8 +14,8 @@ DEFAULTS: dict = {
     "model": "gemini-flash-latest",
     "default_source": "mic",
     "mic_device": None,
-    "codec": "flac",          # flac = lossless (default); opus = butuh ffmpeg
-    "quality": "archive",     # archive|best|balanced|compact
+    "codec": "opus",          # lossy VBR default; archive = FLAC lossless
+    "quality": "balanced",    # best|balanced|compact|archive
     "sample_rate": 16000,
     "channels": "auto",       # auto = 1 kanal utk mic/sys, 2 utk --both
 }
