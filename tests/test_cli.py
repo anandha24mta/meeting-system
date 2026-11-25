@@ -154,6 +154,164 @@ def test_transcribe_unsupported_without_ffmpeg(meeting_home, tmp_path, monkeypat
     assert "ffmpeg" in capsys.readouterr().err  # pesan error → stderr
 
 
+def test_transcribe_unsupported_with_ffmpeg_uses_which_path(meeting_home, tmp_path, monkeypatch):
+    cmds = []
+
+    def fake_run(cmd, **kw):
+        cmds.append(cmd)
+        from pathlib import Path
+        Path(cmd[-1]).write_bytes(b"flac")
+        return type("R", (), {"returncode": 0})()
+
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(cli.queuer, "spawn_worker", lambda: None)
+    src = tmp_path / "old.ape"
+    src.write_bytes(b"\x00")
+
+    assert cli.main(["transcribe", str(src)]) == 0
+    assert cmds[0][0] == "/usr/bin/ffmpeg"
+    job = json.loads(list(paths.queue_dir("pending").glob("*.json"))[0].read_text())
+    assert job["audio"].endswith("-old.ape.flac")
+
+
+def test_transcribe_default_without_ffmpeg_keeps_quiet(meeting_home, tmp_path, monkeypatch, capsys):
+    config.update(audio_codec="flac")
+    monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+    monkeypatch.setattr(cli.queuer, "spawn_worker", lambda: None)
+    src = tmp_path / "zoom.mp4"
+    src.write_bytes(b"fake")
+
+    assert cli.main(["transcribe", str(src)]) == 0
+    assert capsys.readouterr().err == ""
+
+
+def test_aac_opt_in_without_ffmpeg_warns_and_falls_back(
+    meeting_home, tmp_path, monkeypatch, capsys
+):
+    config.update(audio_codec="aac")
+    monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+    monkeypatch.setattr(cli.queuer, "spawn_worker", lambda: None)
+    src = tmp_path / "zoom.mp4"
+    src.write_bytes(b"fake")
+
+    assert cli.main(["transcribe", str(src)]) == 0
+    assert "winget install ffmpeg" in capsys.readouterr().err
+    job = json.loads(list(paths.queue_dir("pending").glob("*.json"))[0].read_text())
+    assert job["audio"] == str(src)
+
+
+def test_record_aac_opt_in_without_ffmpeg_warns_and_still_enqueues(
+    meeting_home, fake_record, monkeypatch, capsys
+):
+    config.update(audio_codec="aac")
+    monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+    monkeypatch.setattr(cli.queuer, "spawn_worker", lambda: None)
+
+    assert cli.main(["record"]) == 0
+    assert "winget install ffmpeg" in capsys.readouterr().err
+    job = json.loads(list(paths.queue_dir("pending").glob("*.json"))[0].read_text())
+    assert job["needs_finalization"] is True
+
+
+def _fake_ffmpeg_run(video, cmds):
+    def _run(cmd, **kw):
+        cmds.append(cmd)
+        if "-show_entries" in cmd:
+            return type("R", (), {"stdout": "video\n" if video else "", "returncode": 0})()
+        from pathlib import Path
+        Path(cmd[-1]).write_bytes(b"remux")
+        return type("R", (), {"returncode": 0})()
+    return _run
+
+
+def test_transcribe_mp4_video_passthrough_opt_in(meeting_home, tmp_path, monkeypatch):
+    monkeypatch.setattr(cli.queuer, "spawn_worker", lambda: None)
+    config.update(audio_codec="aac", container="auto")
+    cmds = []
+    monkeypatch.setattr(cli.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(cli.subprocess, "run", _fake_ffmpeg_run(True, cmds))
+    src = tmp_path / "zoom.mp4"
+    src.write_bytes(b"fake")
+
+    rc = cli.main(["transcribe", str(src)])
+
+    assert rc == 0
+    job = json.loads(list(paths.queue_dir("pending").glob("*.json"))[0].read_text())
+    assert job["audio"].endswith("_passthrough.mp4")
+    assert job["video_passthrough"] is True
+    assert job["vfr"] is True
+    assert job["codec"] == "aac"
+    encode = [c for c in cmds if "-c:v" in c]
+    assert len(encode) == 1
+    assert encode[0][encode[0].index("-c:v") + 1] == "copy"
+    assert "-vn" not in encode[0]
+    assert src.read_bytes() == b"fake"
+
+
+def test_transcribe_mkv_video_passthrough_opt_in(meeting_home, tmp_path, monkeypatch):
+    monkeypatch.setattr(cli.queuer, "spawn_worker", lambda: None)
+    config.update(audio_codec="aac")
+    cmds = []
+    monkeypatch.setattr(cli.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(cli.subprocess, "run", _fake_ffmpeg_run(True, cmds))
+    src = tmp_path / "meet.mkv"
+    src.write_bytes(b"fake")
+
+    assert cli.main(["transcribe", str(src)]) == 0
+    job = json.loads(list(paths.queue_dir("pending").glob("*.json"))[0].read_text())
+    assert job["audio"].endswith("_passthrough.mkv")
+    assert job["container"] == "mkv"
+    assert job["video_passthrough"] is True
+
+
+def test_transcribe_audio_only_container_extracts_without_video(meeting_home, tmp_path, monkeypatch):
+    monkeypatch.setattr(cli.queuer, "spawn_worker", lambda: None)
+    config.update(audio_codec="aac")
+    cmds = []
+    monkeypatch.setattr(cli.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(cli.subprocess, "run", _fake_ffmpeg_run(False, cmds))
+    src = tmp_path / "voice.mp4"
+    src.write_bytes(b"fake")
+
+    assert cli.main(["transcribe", str(src)]) == 0
+    job = json.loads(list(paths.queue_dir("pending").glob("*.json"))[0].read_text())
+    assert job["video_passthrough"] is False
+    assert job["vfr"] is False
+    encode = [c for c in cmds if "-vn" in c]
+    assert len(encode) == 1
+    assert "-c:v" not in encode[0]
+
+
+def test_transcribe_no_aac_opt_in_keeps_source_untouched(meeting_home, tmp_path, monkeypatch):
+    config.update(audio_codec="flac")
+    monkeypatch.setattr(cli.queuer, "spawn_worker", lambda: None)
+    cmds = []
+    monkeypatch.setattr(cli.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(cli.subprocess, "run", _fake_ffmpeg_run(True, cmds))
+    src = tmp_path / "zoom.mp4"
+    src.write_bytes(b"fake")
+
+    assert cli.main(["transcribe", str(src)]) == 0
+    assert cmds == []
+    job = json.loads(list(paths.queue_dir("pending").glob("*.json"))[0].read_text())
+    assert job["audio"] == str(src)
+    assert "codec" not in job
+
+
+def test_transcribe_aac_opt_in_without_ffmpeg_keeps_source(meeting_home, tmp_path, monkeypatch):
+    monkeypatch.setattr(cli.queuer, "spawn_worker", lambda: None)
+    config.update(audio_codec="aac")
+    monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+    src = tmp_path / "zoom.mp4"
+    src.write_bytes(b"fake")
+
+    assert cli.main(["transcribe", str(src)]) == 0
+    job = json.loads(list(paths.queue_dir("pending").glob("*.json"))[0].read_text())
+    assert job["audio"] == str(src)
+    assert "video_passthrough" not in job
+
+
 def test_status_counts_and_last_error(meeting_home, capsys):
     paths.ensure_dirs()
     queuer.enqueue({"id": "a", "status": "pending"})

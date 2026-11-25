@@ -11,7 +11,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from . import finalizer, indexmd, paths, queuer, session
+from . import config, finalizer, indexmd, media, paths, queuer, session
 
 
 def find_orphans() -> list[dict]:
@@ -45,12 +45,21 @@ def offer_recovery(ui_confirm) -> dict | None:
     try:
         if not wavs:
             raise finalizer.FinalizeError("tidak ada WAV input")
-        flac = finalizer.finalize(wavs, meta["id"])
+        cfg = config.load()
+        aac = False
+        if media.wants_aac(cfg) and shutil.which("ffmpeg"):
+            try:
+                final = media.encode_recording_aac(wavs, meta["id"], cfg)
+                aac = True
+            except Exception:
+                final = finalizer.finalize(wavs, meta["id"])
+        else:
+            final = finalizer.finalize(wavs, meta["id"])
         job = {
             "id": meta["id"],
             "created_at": meta.get("started_at") or "unknown",
             "source": meta.get("source", "mic"),
-            "audio": str(flac.relative_to(paths.home() / "data")),
+            "audio": str(final.relative_to(paths.home() / "data")),
             "wav": None,
             "original_path": None,
             "needs_finalization": False,
@@ -59,6 +68,10 @@ def offer_recovery(ui_confirm) -> dict | None:
             "model": _current_model(),
             "status": "pending",
         }
+        if aac:
+            job["codec"] = "aac"
+            job["container"] = media.container_for(cfg)
+            job["vbr"] = True
         queuer.enqueue(job)
         indexmd.upsert(
             {

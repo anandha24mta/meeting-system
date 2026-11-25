@@ -196,6 +196,30 @@ def test_transcribe_no_override_when_ffprobe_missing(meeting_home, tmp_path, mon
     assert client.files.upload_configs[0] is None
 
 
+def test_audio_mime_mapping_covers_m4a_and_mkv():
+    assert transcribe._AUDIO_MIME[".m4a"] == "audio/mp4"
+    assert transcribe._AUDIO_MIME[".mkv"] == "audio/x-matroska"
+    assert transcribe._AUDIO_MIME[".mp4"] == "audio/mp4"
+
+
+def test_transcribe_override_for_mkv_audio_and_video(meeting_home, tmp_path, monkeypatch):
+    from meeting import paths
+    paths.ensure_dirs()
+    audio = tmp_path / "clip.mkv"
+    audio.write_bytes(b"fake")
+    monkeypatch.setattr(transcribe.shutil, "which", lambda name: "/usr/bin/ffprobe")
+
+    monkeypatch.setattr(transcribe.subprocess, "run", _fake_ffprobe_run(""))
+    client = FakeClient()
+    transcribe.transcribe_audio(audio, make_job(), client=client)
+    assert client.files.upload_configs[0] == {"mime_type": "audio/x-matroska"}
+
+    monkeypatch.setattr(transcribe.subprocess, "run", _fake_ffprobe_run("video\n"))
+    client = FakeClient()
+    transcribe.transcribe_audio(audio, make_job(), client=client)
+    assert client.files.upload_configs[0] == {"mime_type": "video/x-matroska"}
+
+
 # --- chunking: audio panjang dipecah jadi beberapa bagian ---------------------
 
 def test_chunk_offsets_splits_evenly():
@@ -241,6 +265,27 @@ def test_split_ffmpeg_raises_clear_error_when_missing(meeting_home, tmp_path, mo
     monkeypatch.setattr(transcribe.shutil, "which", lambda name: None)
     with pytest.raises(transcribe.TranscribeError, match="ffmpeg"):
         transcribe._split_ffmpeg(tmp_path / "x.mp4", [(0.0, 10.0)], "job1")
+
+
+def test_split_ffmpeg_stream_copies_lossy_source(meeting_home, tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from meeting import paths
+
+    paths.ensure_dirs()
+    monkeypatch.setattr(transcribe.shutil, "which", lambda name: "/usr/bin/ffmpeg")
+    seen = []
+
+    def fake_run(argv, **kw):
+        seen.append(argv)
+        Path(argv[-1]).write_bytes(b"x")
+        return type("R", (), {"returncode": 0})()
+
+    monkeypatch.setattr(transcribe.subprocess, "run", fake_run)
+    chunks = transcribe._split_ffmpeg(tmp_path / "voice.m4a", [(0.0, 900.0)], "copyjob")
+    assert chunks[0].suffix == ".m4a"
+    assert "copy" in seen[0]
+    assert "-ar" not in seen[0]
 
 
 def test_transcribe_splits_long_audio_and_concatenates_with_markers(
@@ -313,6 +358,45 @@ def test_transcribe_fails_clearly_on_silent_audio_without_calling_gemini(
     with pytest.raises(transcribe.TranscribeError, match="hening"):
         transcribe.transcribe_audio(silent, make_job(), client=client)
     assert client.files.uploaded == []  # tidak pernah upload sama sekali
+
+
+def test_meta_has_additive_fields_with_backward_compatible_defaults(meeting_home, audio):
+    from meeting import paths
+    paths.ensure_dirs()
+    meta = transcribe.transcribe_audio(audio, make_job(), client=FakeClient())
+    meta_json = json.loads(
+        (paths.output_dir() / meta["id"] / "meta.json").read_text(encoding="utf-8")
+    )
+    for key in ("codec", "container", "bitrate", "vbr", "vfr", "video_passthrough"):
+        assert key in meta_json
+    assert meta["codec"] == "flac"
+    assert meta["container"] == "flac"
+    assert meta["bitrate"] is None
+    assert meta["vbr"] is False
+    assert meta["vfr"] is False
+    assert meta["video_passthrough"] is False
+
+
+def test_meta_reflects_aac_video_passthrough_job_fields(meeting_home, tmp_path, monkeypatch):
+    from meeting import paths
+    paths.ensure_dirs()
+    audio = tmp_path / "zoom.mp4"
+    audio.write_bytes(b"fake")
+    monkeypatch.setattr(transcribe.shutil, "which", lambda name: None)
+    job = make_job(source="file")
+    job.update({
+        "codec": "aac", "container": "mp4", "bitrate": 64000,
+        "vbr": True, "vfr": True, "video_passthrough": True,
+    })
+
+    meta = transcribe.transcribe_audio(audio, job, client=FakeClient())
+
+    assert meta["codec"] == "aac"
+    assert meta["container"] == "mp4"
+    assert meta["bitrate"] == 64000
+    assert meta["vbr"] is True
+    assert meta["vfr"] is True
+    assert meta["video_passthrough"] is True
 
 
 def test_transcribe_chunk_local_cleanup_even_on_failure(meeting_home, audio, monkeypatch):

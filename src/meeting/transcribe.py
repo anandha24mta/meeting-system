@@ -8,13 +8,9 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import config, indexmd, paths
+from . import config, indexmd, media, paths
 
-_AUDIO_MIME = {
-    ".mp4": "audio/mp4", ".m4a": "audio/mp4", ".webm": "audio/webm",
-    ".mp3": "audio/mpeg", ".ogg": "audio/ogg", ".flac": "audio/flac",
-    ".wav": "audio/wav",
-}
+_AUDIO_MIME = dict(media.AUDIO_MIME)
 
 TRANSCRIPT_PROMPT = (
     "Transkripsikan audio meeting berikut secara lengkap dan verbatim dalam bahasa "
@@ -95,7 +91,7 @@ def _audio_mime_override(audio_path: Path) -> str | None:
     except Exception:
         return None
     has_video = bool(out.stdout.strip())
-    return None if has_video else _AUDIO_MIME[ext]
+    return media.container_mime(audio_path, has_video)
 
 
 def _response_text(resp) -> str:
@@ -150,6 +146,12 @@ def _split_soundfile(audio_path: Path, offsets: list[tuple[float, float]], job_i
     return out_paths
 
 
+_COPY_CHUNK_EXT = {
+    ".m4a": ".m4a", ".mp4": ".m4a", ".ogg": ".ogg", ".opus": ".ogg",
+    ".webm": ".webm", ".mp3": ".mp3", ".mkv": ".mkv",
+}
+
+
 def _split_ffmpeg(audio_path: Path, offsets: list[tuple[float, float]], job_id: str) -> list[Path]:
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
@@ -157,14 +159,25 @@ def _split_ffmpeg(audio_path: Path, offsets: list[tuple[float, float]], job_id: 
             "Meeting ini perlu dipecah jadi beberapa bagian (durasi panjang) dan format "
             "filenya butuh ffmpeg untuk itu — install dengan: winget install ffmpeg"
         )
+    copy_ext = _COPY_CHUNK_EXT.get(audio_path.suffix.lower())
     out_paths: list[Path] = []
     for i, (start, length) in enumerate(offsets):
-        out = paths.tmp_dir() / f"{job_id}_chunk{i}.flac"
-        rc = subprocess.run(
-            [ffmpeg, "-y", "-ss", str(start), "-i", str(audio_path), "-t", str(length),
-             "-ac", "1", "-ar", "16000", str(out)],
-            capture_output=True,
-        )
+        ext = copy_ext or ".flac"
+        out = paths.tmp_dir() / f"{job_id}_chunk{i}{ext}"
+        if copy_ext:
+            argv = [ffmpeg, "-y", "-ss", str(start), "-i", str(audio_path),
+                    "-t", str(length), "-map", "0:a:0", "-vn", "-c:a", "copy", str(out)]
+        else:
+            argv = [ffmpeg, "-y", "-ss", str(start), "-i", str(audio_path),
+                    "-t", str(length), "-ac", "1", "-ar", "16000", str(out)]
+        rc = subprocess.run(argv, capture_output=True)
+        if copy_ext and (rc.returncode != 0 or not out.exists()):
+            out = paths.tmp_dir() / f"{job_id}_chunk{i}.flac"
+            rc = subprocess.run(
+                [ffmpeg, "-y", "-ss", str(start), "-i", str(audio_path),
+                 "-t", str(length), "-ac", "1", "-ar", "16000", str(out)],
+                capture_output=True,
+            )
         if rc.returncode != 0 or not out.exists():
             for p in out_paths:
                 p.unlink(missing_ok=True)
@@ -276,6 +289,12 @@ def transcribe_audio(audio_path: Path, job: dict, client=None) -> dict:
         "status": "done",
         "transcribed_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "audio": job.get("audio"),
+        "codec": job.get("codec") or media.guess_codec(audio_path),
+        "container": job.get("container") or audio_path.suffix.lower().lstrip("."),
+        "bitrate": job.get("bitrate"),
+        "vbr": job.get("vbr", False),
+        "vfr": job.get("vfr", False),
+        "video_passthrough": job.get("video_passthrough", False),
     }
     header = (
         f"# Transkrip — {job['id']}\n\n"
