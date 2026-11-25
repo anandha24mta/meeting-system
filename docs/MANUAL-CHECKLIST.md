@@ -3,6 +3,14 @@
 Jalankan di mesin Windows target (mic/headset/speaker tersambung, .env berisi
 GEMINI_API_KEY valid). Centang setiap item.
 
+## Format & setup
+
+Input: mp4, mp3, m4a, flac, wav, webm, ogg, mkv. Default `audio_codec: flac`,
+`container: auto` — rekaman tetap FLAC. Untuk AAC/mp4/mkv: `winget install ffmpeg`
+lalu set `"audio_codec": "aac"` di config.json. `auto` = m4a untuk rekaman
+audio-only, container sumber untuk input mp4/mkv. VFR hanya dipertahankan pada
+passthrough source mp4/mkv (`-c:v copy`); tool ini tidak melakukan video capture.
+
 ## Rekam
 
 - [x] `meeting record --mic` — berhenti dengan Ctrl+C; job muncul di `meeting status`;

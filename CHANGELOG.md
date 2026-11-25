@@ -4,6 +4,25 @@ Semua perubahan penting pada proyek ini didokumentasikan di sini. Format
 mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), versi
 mengikuti [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-11-25
+
+### Ditambahkan
+- Opsi `audio_codec: aac` + `container: auto|m4a|mp4|mkv` di `config.json`.
+  Default tetap `flac`/`auto` — rekaman audio-only tidak berubah
+- Encoder AAC-LC via ffmpeg (`-q:a` native, `-vbr` bila `libfdk_aac` ada),
+  target ~64 kbps mono / ~128 kbps stereo
+- Passthrough video untuk input mp4/mkv saat AAC di-opt-in: `-c:v copy`
+  (video byte-identical, VFR tetap utuh), tanpa re-encode dan tanpa video capture
+- Preflight ffmpeg di CLI dengan pesan `winget install ffmpeg`; fallback ke FLAC
+  bila ffmpeg tidak ada
+- Field baru di `meta.json`: `codec`, `container`, `bitrate`, `vbr`, `vfr`,
+  `video_passthrough` (additive, backward compatible)
+- Dukungan input `.mkv`
+
+### Catatan
+- VFR hanya berlaku untuk jalur passthrough source mp4/mkv, bukan rekaman
+  audio-only (tidak ada video stream yang dihasilkan tool ini)
+
 ## [0.2.0] - 2026-09-02
 
 Perbaikan dari QA manual di mesin Windows nyata (bukan cuma unit test).
