@@ -68,7 +68,7 @@ def test_enqueue_rejects_bad_id(meeting_home):
         queuer.enqueue(make_job(id="sp ace"))
 
 
-def test_spawn_worker_popen_called(meeting_home, monkeypatch):
+def fake_popen(monkeypatch):
     calls = []
 
     class FakePopen:
@@ -76,9 +76,25 @@ def test_spawn_worker_popen_called(meeting_home, monkeypatch):
             calls.append((a, kw))
 
     monkeypatch.setattr(queuer.subprocess, "Popen", FakePopen)
+    return calls
+
+
+def test_spawn_worker_popen_called(meeting_home, monkeypatch):
+    calls = fake_popen(monkeypatch)
     queuer.spawn_worker()
     assert len(calls) == 1
     args, kw = calls[0]
     cmd = args[0]
     assert "meeting.worker" in cmd  # python -m meeting.worker
     assert kw["stdout"] == queuer.subprocess.DEVNULL  # detached: tak menempel di terminal
+
+
+def test_spawn_worker_respects_limit(meeting_home, monkeypatch):
+    from meeting import paths
+
+    paths.ensure_dirs()
+    for i in range(10):
+        queuer.enqueue(make_job(id=f"j{i}"))
+    calls = fake_popen(monkeypatch)
+    queuer.spawn_worker(max_workers=2)
+    assert len(calls) == 2

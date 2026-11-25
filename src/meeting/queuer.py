@@ -7,12 +7,14 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 
-from . import paths
+from . import config, paths
 
 _ID_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
+_OWNER_STALE_SEC = 900.0
 
 
 def is_valid_id(s: str) -> bool:
@@ -47,24 +49,42 @@ def enqueue(job: dict) -> Path:
     return dest
 
 
-def spawn_worker() -> None:
-    """Jalankan meeting-worker detached. Best-effort: worker juga bisa dipanggil manual."""
+def active_workers() -> int:
+    """Jumlah worker yang punya kepemilikan job masih segar."""
+    count = 0
+    for owner in paths.queue_dir("pending").glob("*.processing.owner"):
+        try:
+            data = json.loads(owner.read_text(encoding="utf-8"))
+            if time.time() - float(data["ts"]) < _OWNER_STALE_SEC:
+                count += 1
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return count
+
+
+def spawn_worker(max_workers: int | None = None) -> None:
+    """Spawn worker detached sampai batas konkurensi; sisanya habiskan antrean sendiri."""
+    limit = max(1, int(max_workers if max_workers is not None else config.load().get("max_workers", 4)))
+    active = active_workers()
+    pending = len(list(paths.queue_dir("pending").glob("*.json")))
+    to_spawn = max(0, min(limit, max(1, pending)) - active)
     kwargs: dict = {}
     if sys.platform == "win32":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
     else:
         kwargs["start_new_session"] = True
-    try:
-        subprocess.Popen(
-            [sys.executable, "-m", "meeting.worker"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
-            **kwargs,
-        )
-    except OSError:
-        # Worker tidak ter-spawn bukan error fatal job — user dapat jalankan manual.
-        pass
+    for _ in range(to_spawn):
+        try:
+            subprocess.Popen(
+                [sys.executable, "-m", "meeting.worker"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                **kwargs,
+            )
+        except OSError:
+            # Worker tidak ter-spawn bukan error fatal job — user dapat jalankan manual.
+            pass
 
 
 def new_job_id(name: str | None = None) -> str:
