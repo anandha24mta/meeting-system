@@ -154,6 +154,65 @@ def test_transcribe_unsupported_without_ffmpeg(meeting_home, tmp_path, monkeypat
     assert "ffmpeg" in capsys.readouterr().err  # pesan error → stderr
 
 
+def test_transcribe_unsupported_with_ffmpeg_uses_which_path(meeting_home, tmp_path, monkeypatch):
+    cmds = []
+
+    def fake_run(cmd, **kw):
+        cmds.append(cmd)
+        from pathlib import Path
+        Path(cmd[-1]).write_bytes(b"flac")
+        return type("R", (), {"returncode": 0})()
+
+    monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(cli.queuer, "spawn_worker", lambda: None)
+    src = tmp_path / "old.ape"
+    src.write_bytes(b"\x00")
+
+    assert cli.main(["transcribe", str(src)]) == 0
+    assert cmds[0][0] == "/usr/bin/ffmpeg"
+    job = json.loads(list(paths.queue_dir("pending").glob("*.json"))[0].read_text())
+    assert job["audio"].endswith("-old.ape.flac")
+
+
+def test_transcribe_default_without_ffmpeg_keeps_quiet(meeting_home, tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+    monkeypatch.setattr(cli.queuer, "spawn_worker", lambda: None)
+    src = tmp_path / "zoom.mp4"
+    src.write_bytes(b"fake")
+
+    assert cli.main(["transcribe", str(src)]) == 0
+    assert capsys.readouterr().err == ""
+
+
+def test_aac_opt_in_without_ffmpeg_warns_and_falls_back(
+    meeting_home, tmp_path, monkeypatch, capsys
+):
+    config.update(audio_codec="aac")
+    monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+    monkeypatch.setattr(cli.queuer, "spawn_worker", lambda: None)
+    src = tmp_path / "zoom.mp4"
+    src.write_bytes(b"fake")
+
+    assert cli.main(["transcribe", str(src)]) == 0
+    assert "winget install ffmpeg" in capsys.readouterr().err
+    job = json.loads(list(paths.queue_dir("pending").glob("*.json"))[0].read_text())
+    assert job["audio"] == str(src)
+
+
+def test_record_aac_opt_in_without_ffmpeg_warns_and_still_enqueues(
+    meeting_home, fake_record, monkeypatch, capsys
+):
+    config.update(audio_codec="aac")
+    monkeypatch.setattr(cli.shutil, "which", lambda name: None)
+    monkeypatch.setattr(cli.queuer, "spawn_worker", lambda: None)
+
+    assert cli.main(["record"]) == 0
+    assert "winget install ffmpeg" in capsys.readouterr().err
+    job = json.loads(list(paths.queue_dir("pending").glob("*.json"))[0].read_text())
+    assert job["needs_finalization"] is True
+
+
 def _fake_ffmpeg_run(video, cmds):
     def _run(cmd, **kw):
         cmds.append(cmd)

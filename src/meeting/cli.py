@@ -20,9 +20,21 @@ def _eprint(msg: str) -> None:
     print(msg, file=sys.stderr)
 
 
+def _ffmpeg_preflight(required: bool) -> str | None:
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        if required:
+            _eprint("Format ini butuh ffmpeg — install dengan: winget install ffmpeg")
+        else:
+            _eprint("ffmpeg tidak ditemukan — FLAC dipakai; untuk AAC: winget install ffmpeg")
+    return ffmpeg
+
+
 def cmd_record(args) -> int:
     paths.ensure_dirs()  # tmp/ dkk harus ada sebelum check_disk (statvfs butuh path)
     cfg = config.load()
+    if media.wants_aac(cfg):
+        _ffmpeg_preflight(False)
     source = args.sys and "sys" or args.mic and "mic" or args.both and "both" or cfg["default_source"]
     if args.sys or args.mic or args.both:
         config.update(default_source=source)
@@ -131,7 +143,7 @@ def _aac_passthrough(src: Path, job_id: str, ext: str, cfg: dict) -> tuple[str, 
     """Opt-in AAC: remux dgn video copy (VFR utuh) atau ekstrak audio saja."""
     if not (media.wants_aac(cfg) and ext in media.VIDEO_SOURCE_EXTS):
         return "", {}
-    ffmpeg = shutil.which("ffmpeg")
+    ffmpeg = _ffmpeg_preflight(False)
     if not ffmpeg:
         return "", {}
     container = media.container_for(cfg, source_ext=ext)
@@ -182,9 +194,8 @@ def cmd_transcribe(args) -> int:
         if media_meta:
             audio_rel = passthrough_rel
         else:
-            ffmpeg = shutil.which("ffmpeg")
+            ffmpeg = _ffmpeg_preflight(True)
             if not ffmpeg:
-                _eprint("Format ini butuh ffmpeg — install dengan: winget install ffmpeg")
                 return 1
             paths.ensure_dirs()
             out = paths.tmp_dir() / f"{job_id}{ext}.flac"
