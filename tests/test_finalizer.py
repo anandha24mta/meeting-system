@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 import pytest
 import soundfile as sf
@@ -19,13 +21,26 @@ def wav_mono(meeting_home, tmp_path):
 def test_finalize_mono_produces_flac(meeting_home, wav_mono):
     from meeting import paths
     paths.ensure_dirs()
-    out = finalizer.finalize([wav_mono], "2026-08-29_1400")
+    cfg = {"codec": "flac", "quality": "archive"}
+    out = finalizer.finalize([wav_mono], "2026-08-29_1400", cfg)
     assert out == paths.recordings_dir() / "2026-08-29_1400.flac"
     assert out.exists()
     info = sf.info(out)
     assert info.samplerate == 16000
     assert info.channels == 1
     assert info.format == "FLAC"
+
+
+def test_finalize_mono_defaults_to_opus(meeting_home, wav_mono, monkeypatch):
+    from meeting import paths
+
+    paths.ensure_dirs()
+    from meeting import codecs
+
+    monkeypatch.setattr(codecs, "decode_ok", lambda p: True)
+    out = finalizer.finalize([wav_mono], "default-opus")
+    assert out == paths.recordings_dir() / "default-opus.opus"
+    assert out.exists()
 
 
 def test_finalize_deletes_wav_after_verify(meeting_home, wav_mono):
@@ -46,7 +61,8 @@ def test_finalize_two_wavs_makes_stereo(meeting_home, tmp_path):
     sf.write(w1, left, sr, subtype="PCM_16")
     sf.write(w2, right, sr, subtype="PCM_16")
 
-    out = finalizer.finalize([w1, w2], "2026-08-29_1500")
+    cfg = {"codec": "flac", "quality": "archive", "channels": "auto"}
+    out = finalizer.finalize([w1, w2], "2026-08-29_1500", cfg)
     data, sr_out = sf.read(out)
     assert sr_out == 16000
     assert data.ndim == 2 and data.shape[1] == 2
@@ -81,3 +97,135 @@ def test_finalize_keeps_wav_on_error(meeting_home, wav_mono):
 def test_finalize_rejects_empty_list(meeting_home):
     with pytest.raises(finalizer.FinalizeError):
         finalizer.finalize([], "x")
+
+
+def _opus_cfg(meeting_home, **overrides):
+    from meeting import config
+    cfg = config.load()
+    cfg.update(codec="opus", quality="balanced")
+    cfg.update(overrides)
+    return cfg
+
+
+def _fake_opus_encode(monkeypatch, *, decode=True, duration=1.0, fail=None):
+    calls = []
+
+    def encode(src, out, *, bitrate_kbps, channels, samplerate=16000):
+        calls.append({
+            "src": Path(src), "out": Path(out), "bitrate": bitrate_kbps,
+            "channels": channels, "samplerate": samplerate,
+        })
+        if fail is not None:
+            raise fail
+        Path(out).write_bytes(b"opus")
+        return Path(out)
+
+    monkeypatch.setattr(finalizer.codecs, "encode_opus", encode)
+    monkeypatch.setattr(finalizer.codecs, "probe_duration", lambda _p: duration)
+    monkeypatch.setattr(finalizer.codecs, "decode_ok", lambda _p: decode)
+    return calls
+
+
+def test_opus_profile_produces_opus_and_deletes_wav(meeting_home, wav_mono, monkeypatch):
+    from meeting import paths
+    paths.ensure_dirs()
+    calls = _fake_opus_encode(monkeypatch)
+    out = finalizer.finalize([wav_mono], "opus-mono", _opus_cfg(meeting_home))
+    assert out == paths.recordings_dir() / "opus-mono.opus"
+    assert calls[0]["bitrate"] == 32
+    assert calls[0]["channels"] == 1
+    assert calls[0]["src"] == wav_mono  # langsung dari WAV, tanpa numpy penuh
+    assert not wav_mono.exists()
+
+
+def test_opus_is_default_even_when_codec_absent(meeting_home, wav_mono, monkeypatch):
+    from meeting import codecs, config, paths
+
+    paths.ensure_dirs()
+    cfg = config.load()
+    cfg.pop("codec", None)
+    cfg["quality"] = "best"
+    monkeypatch.setattr(codecs, "decode_ok", lambda p: True)
+    out = finalizer.finalize([wav_mono], "still-opus", cfg)
+    assert out.suffix == ".opus"
+    assert out.exists()
+
+
+def test_opus_verify_failure_falls_back_to_flac(meeting_home, wav_mono, monkeypatch, capsys):
+    from meeting import paths
+    paths.ensure_dirs()
+    _fake_opus_encode(monkeypatch, decode=False)
+    out = finalizer.finalize([wav_mono], "opus-bad", _opus_cfg(meeting_home))
+    assert out == paths.recordings_dir() / "opus-bad.flac"
+    assert out.exists()
+    assert not (paths.recordings_dir() / "opus-bad.opus").exists()
+    assert not wav_mono.exists()  # FLAC fallback terverify dulu, baru WAV dihapus
+    assert "FLAC" in capsys.readouterr().err
+
+
+def test_opus_encode_error_falls_back_to_flac(meeting_home, wav_mono, monkeypatch, capsys):
+    from meeting import codecs, paths
+    paths.ensure_dirs()
+    _fake_opus_encode(monkeypatch, fail=codecs.CodecError("ffmpeg tidak ditemukan"))
+    out = finalizer.finalize([wav_mono], "opus-fail", _opus_cfg(meeting_home))
+    assert out.suffix == ".flac" and out.exists()
+    assert not wav_mono.exists()
+    assert "ffmpeg" in capsys.readouterr().err
+
+
+def test_fallback_failure_never_deletes_wav(meeting_home, wav_mono, monkeypatch):
+    """Opus invalid + FLAC fallback gagal → WAV sumber tetap utuh."""
+    from meeting import paths
+    paths.ensure_dirs()
+    _fake_opus_encode(monkeypatch, decode=False)
+
+    def boom(*_a, **_kw):
+        raise OSError("disk penuh")
+
+    monkeypatch.setattr(finalizer.sf, "write", boom)
+    with pytest.raises(OSError, match="disk penuh"):
+        finalizer.finalize([wav_mono], "opus-nofallback", _opus_cfg(meeting_home))
+    assert wav_mono.exists()
+    assert not (paths.recordings_dir() / "opus-nofallback.opus").exists()
+
+
+def test_opus_duration_mismatch_falls_back(meeting_home, wav_mono, monkeypatch):
+    from meeting import paths
+    paths.ensure_dirs()
+    _fake_opus_encode(monkeypatch)
+    monkeypatch.setattr(
+        finalizer.codecs, "probe_duration",
+        lambda p: 30.0 if Path(p).suffix == ".opus" else 1.0,
+    )
+    out = finalizer.finalize([wav_mono], "opus-drift", _opus_cfg(meeting_home))
+    assert out.suffix == ".flac" and out.exists()
+    assert not (paths.recordings_dir() / "opus-drift.opus").exists()
+
+
+def test_opus_two_wavs_merged_to_stereo_stream(meeting_home, tmp_path, monkeypatch):
+    from meeting import paths
+    paths.ensure_dirs()
+    sr = 16000
+    t = np.linspace(0, 0.5, sr // 2, endpoint=False)
+    w1, w2 = tmp_path / "a.wav", tmp_path / "b.wav"
+    sf.write(w1, (0.2 * np.sin(2 * np.pi * 300 * t)).astype(np.float32), sr, subtype="PCM_16")
+    sf.write(w2, (0.2 * np.sin(2 * np.pi * 500 * t)).astype(np.float32), sr, subtype="PCM_16")
+
+    calls, shapes = [], []
+
+    def capture(src, out, *, bitrate_kbps, channels, samplerate=16000):
+        data, _sr = sf.read(str(src), dtype="float32")
+        shapes.append(data.shape)
+        calls.append({"src": Path(src), "bitrate": bitrate_kbps, "channels": channels})
+        Path(out).write_bytes(b"opus")
+        return Path(out)
+
+    monkeypatch.setattr(finalizer.codecs, "encode_opus", capture)
+    monkeypatch.setattr(finalizer.codecs, "probe_duration", lambda _p: 0.5)
+    monkeypatch.setattr(finalizer.codecs, "decode_ok", lambda _p: True)
+    out = finalizer.finalize([w1, w2], "opus-stereo", _opus_cfg(meeting_home))
+    assert out.suffix == ".opus"
+    assert calls[0]["bitrate"] == 64 and calls[0]["channels"] == 2
+    assert shapes == [(sr // 2, 2)]
+    assert not (paths.tmp_dir() / "opus-stereo_merged.wav").exists()
+    assert not w1.exists() and not w2.exists()

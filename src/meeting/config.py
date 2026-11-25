@@ -7,7 +7,18 @@ import tempfile
 
 from . import paths
 
-DEFAULTS: dict = {"model": "gemini-flash-latest", "default_source": "mic", "mic_device": None}
+CODEC_CHOICES = ("flac", "opus")
+QUALITY_CHOICES = ("archive", "best", "balanced", "compact")
+
+DEFAULTS: dict = {
+    "model": "gemini-flash-latest",
+    "default_source": "mic",
+    "mic_device": None,
+    "codec": "opus",          # lossy VBR default; archive = FLAC lossless
+    "quality": "balanced",    # best|balanced|compact|archive
+    "sample_rate": 16000,
+    "channels": "auto",       # auto = 1 kanal utk mic/sys, 2 utk --both
+}
 
 
 class ConfigError(RuntimeError):

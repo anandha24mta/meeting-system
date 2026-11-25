@@ -4,6 +4,27 @@ Semua perubahan penting pada proyek ini didokumentasikan di sini. Format
 mengikuti [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), versi
 mengikuti [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-11-25
+
+### Ditambahkan
+- Profil kualitas audio lewat `config.json`: `codec` (`flac`/`opus`), `quality`
+  (`archive`/`best`/`balanced`/`compact`), `sample_rate`, `channels`. Opus memakai
+  `libopus` VBR, `-application voip`, `-compression_level 10` — CPU-only, input
+  WAV dibaca langsung oleh ffmpeg (memory bounded)
+- Fallback otomatis ke FLAC bila ffmpeg absen atau output Opus gagal verify;
+  WAV sumber tidak pernah dihapus sebelum verify sukses
+- Guard CPU-only di semua perintah ffmpeg: `-hwaccel none`, `-threads 2`,
+  `OMP/MKL/OPENBLAS_NUM_THREADS=1`
+- `tools/bench_codecs.py` — benchmark ukuran/durasi FLAC vs Opus, hasil JSON
+  ditulis ke file (bukan stdout)
+
+### Diubah
+- Default finalisasi kini Opus VBR `balanced` (bukan FLAC): ≈14 MB/jam mono
+  vs ≈55 MB/jam FLAC, kualitas ucapan terjaga lewat mode `voip` + VBR.
+  FLAC lossless tetap tersedia via `codec: "flac", quality: "archive"`
+- Output `.opus` dikirim ke Gemini dengan mime `audio/ogg`; Gemini tetap
+  satu-satunya backend transkripsi (tanpa model lokal / GPU inference)
+
 ## [0.2.0] - 2026-09-02
 
 Perbaikan dari QA manual di mesin Windows nyata (bukan cuma unit test).

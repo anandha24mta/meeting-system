@@ -1,5 +1,6 @@
 # tests/test_cli.py — bagian devices (file dilengkapi di Task 12)
 import json
+from pathlib import Path
 
 from meeting import devices
 
@@ -152,6 +153,26 @@ def test_transcribe_unsupported_without_ffmpeg(meeting_home, tmp_path, monkeypat
     rc = cli.main(["transcribe", str(src)])
     assert rc == 1
     assert "ffmpeg" in capsys.readouterr().err  # pesan error → stderr
+
+
+def test_transcribe_ffmpeg_conversion_is_cpu_only(meeting_home, tmp_path, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(cli.shutil, "which", lambda _n: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(cli.queuer, "spawn_worker", lambda: None)
+
+    def fake_run(argv, **kw):
+        seen["argv"] = argv
+        seen["env"] = kw.get("env", {})
+        Path(argv[-1]).write_bytes(b"x")
+        return type("R", (), {"returncode": 0})()
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    src = tmp_path / "old.ape"
+    src.write_bytes(b"\x00")
+    assert cli.main(["transcribe", str(src)]) == 0
+    assert seen["argv"][seen["argv"].index("-hwaccel") + 1] == "none"
+    assert seen["argv"][seen["argv"].index("-threads") + 1] == "2"
+    assert seen["env"]["OMP_NUM_THREADS"] == "1"
 
 
 def test_status_counts_and_last_error(meeting_home, capsys):

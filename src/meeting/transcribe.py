@@ -8,12 +8,12 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import config, indexmd, paths
+from . import codecs, config, indexmd, paths
 
 _AUDIO_MIME = {
     ".mp4": "audio/mp4", ".m4a": "audio/mp4", ".webm": "audio/webm",
     ".mp3": "audio/mpeg", ".ogg": "audio/ogg", ".flac": "audio/flac",
-    ".wav": "audio/wav",
+    ".wav": "audio/wav", ".opus": "audio/ogg",
 }
 
 TRANSCRIPT_PROMPT = (
@@ -150,6 +150,12 @@ def _split_soundfile(audio_path: Path, offsets: list[tuple[float, float]], job_i
     return out_paths
 
 
+_COPY_CHUNK_EXT = {
+    ".m4a": ".m4a", ".mp4": ".m4a", ".ogg": ".ogg", ".opus": ".ogg",
+    ".webm": ".webm", ".mp3": ".mp3", ".mkv": ".mkv",
+}
+
+
 def _split_ffmpeg(audio_path: Path, offsets: list[tuple[float, float]], job_id: str) -> list[Path]:
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
@@ -157,14 +163,30 @@ def _split_ffmpeg(audio_path: Path, offsets: list[tuple[float, float]], job_id: 
             "Meeting ini perlu dipecah jadi beberapa bagian (durasi panjang) dan format "
             "filenya butuh ffmpeg untuk itu — install dengan: winget install ffmpeg"
         )
+    copy_ext = _COPY_CHUNK_EXT.get(audio_path.suffix.lower())
     out_paths: list[Path] = []
     for i, (start, length) in enumerate(offsets):
-        out = paths.tmp_dir() / f"{job_id}_chunk{i}.flac"
-        rc = subprocess.run(
-            [ffmpeg, "-y", "-ss", str(start), "-i", str(audio_path), "-t", str(length),
-             "-ac", "1", "-ar", "16000", str(out)],
-            capture_output=True,
-        )
+        ext = copy_ext or ".flac"
+        out = paths.tmp_dir() / f"{job_id}_chunk{i}{ext}"
+        if copy_ext:
+            argv = [ffmpeg, "-y", "-hwaccel", "none", "-ss", str(start),
+                    "-i", str(audio_path), "-t", str(length),
+                    "-map", "0:a:0", "-vn", "-c:a", "copy",
+                    "-threads", str(codecs.CPU_THREADS), str(out)]
+        else:
+            argv = [ffmpeg, "-y", "-hwaccel", "none", "-ss", str(start),
+                    "-i", str(audio_path), "-t", str(length),
+                    "-ac", "1", "-ar", "16000",
+                    "-threads", str(codecs.CPU_THREADS), str(out)]
+        rc = subprocess.run(argv, capture_output=True, env=codecs.cpu_env())
+        if copy_ext and (rc.returncode != 0 or not out.exists()):
+            out = paths.tmp_dir() / f"{job_id}_chunk{i}.flac"
+            rc = subprocess.run(
+                [ffmpeg, "-y", "-hwaccel", "none", "-ss", str(start),
+                 "-i", str(audio_path), "-t", str(length), "-ac", "1", "-ar", "16000",
+                 "-threads", str(codecs.CPU_THREADS), str(out)],
+                capture_output=True, env=codecs.cpu_env(),
+            )
         if rc.returncode != 0 or not out.exists():
             for p in out_paths:
                 p.unlink(missing_ok=True)

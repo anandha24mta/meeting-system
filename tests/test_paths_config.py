@@ -30,13 +30,37 @@ from meeting import config
 
 def test_load_creates_default_on_first_run(meeting_home):
     cfg = config.load()
-    assert cfg == {"model": "gemini-flash-latest", "default_source": "mic", "mic_device": None}
+    assert cfg["model"] == "gemini-flash-latest"
+    assert cfg["default_source"] == "mic"
+    assert cfg["mic_device"] is None
     assert config_file_json_exists()
 
 
 def config_file_json_exists():
     from meeting import paths
     return paths.config_file().is_file()
+
+
+def test_audio_quality_keys_are_additive_defaults(meeting_home):
+    cfg = config.load()
+    assert cfg["codec"] == "opus"
+    assert cfg["quality"] == "balanced"
+    assert cfg["sample_rate"] == 16000
+    assert cfg["channels"] == "auto"
+    assert config.QUALITY_CHOICES == ("archive", "best", "balanced", "compact")
+    assert config.CODEC_CHOICES == ("flac", "opus")
+
+
+def test_old_config_without_audio_keys_still_loads(meeting_home):
+    from meeting import paths
+    paths.config_file().write_text(
+        json.dumps({"model": "gemini-2.5-pro", "default_source": "sys", "mic_device": None}),
+        encoding="utf-8",
+    )
+    cfg = config.load()
+    assert cfg["model"] == "gemini-2.5-pro"
+    assert cfg["default_source"] == "sys"
+    assert cfg["codec"] == "opus"  # config lama tetap valid, key baru terisi default
 
 
 def test_load_merges_file_over_defaults(meeting_home):

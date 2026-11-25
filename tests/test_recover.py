@@ -69,7 +69,7 @@ def test_offer_recovery_confirmed_finalizes_and_enqueues(meeting_home, monkeypat
     assert job is not None and job["id"] == "2026-08-28_0900"
     assert job["duration_sec"] == pytest.approx(0.3)  # durasi asli, bukan 0 (WAV sudah dihapus finalize)
     # FLAC final ada, WAV dibersihkan oleh finalizer
-    assert (paths.recordings_dir() / "2026-08-28_0900.flac").exists()
+    assert (paths.recordings_dir() / "2026-08-28_0900.opus").exists()
     pend = list(paths.queue_dir("pending").glob("*.json"))
     assert len(pend) == 1
     assert not paths.session_file().exists()
@@ -103,7 +103,7 @@ def test_recovery_from_empty_wav_paths_globs_tmp(meeting_home, monkeypatch):
 
     assert job is not None and job["id"] == "2026-08-28_0900"
     assert job["duration_sec"] == pytest.approx(0.3)
-    assert (paths.recordings_dir() / "2026-08-28_0900.flac").exists()
+    assert (paths.recordings_dir() / "2026-08-28_0900.opus").exists()
     assert len(list(paths.queue_dir("pending").glob("*.json"))) == 1
     assert not paths.session_file().exists()  # tidak wedged — session dibersihkan
     assert not wav.exists()  # WAV dimakan finalize (FLAC tersimpan)

@@ -182,7 +182,7 @@ def test_run_once_finalizes_wav_before_transcribe(meeting_home, monkeypatch, tmp
     )
     worker.run_once()
 
-    assert calls and "recordings" in calls[0] and calls[0].endswith(".flac")
+    assert calls and "recordings" in calls[0] and calls[0].endswith(".opus")
     assert not wav.exists()  # WAV dibersihkan setelah FLAC verify
     done_job = json.loads(
         list(paths.queue_dir("done").glob("*.json"))[0].read_text(encoding="utf-8")
