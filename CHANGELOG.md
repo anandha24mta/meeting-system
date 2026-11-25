@@ -19,6 +19,7 @@ mengikuti [Semantic Versioning](https://semver.org/).
   ditulis ke file (bukan stdout)
 
 ### Diubah
+- Default model Gemini `gemini-2.5-flash` (`gemini-flash-latest` sudah 404)
 - Default finalisasi kini Opus VBR `balanced` (bukan FLAC): ≈14 MB/jam mono
   vs ≈55 MB/jam FLAC, kualitas ucapan terjaga lewat mode `voip` + VBR.
   FLAC lossless tetap tersedia via `codec: "flac", quality: "archive"`

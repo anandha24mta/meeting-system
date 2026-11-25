@@ -11,7 +11,7 @@ CODEC_CHOICES = ("flac", "opus")
 QUALITY_CHOICES = ("archive", "best", "balanced", "compact")
 
 DEFAULTS: dict = {
-    "model": "gemini-flash-latest",
+    "model": "gemini-2.5-flash",
     "default_source": "mic",
     "mic_device": None,
     "codec": "opus",          # lossy VBR default; archive = FLAC lossless
