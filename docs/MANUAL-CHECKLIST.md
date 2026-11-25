@@ -34,6 +34,17 @@ GEMINI_API_KEY valid). Centang setiap item.
 - [ ] Tekan Ctrl+C saat `meeting record --both` → terminal bebas dalam hitungan detik
       dan kedua stream (mic + sistem) berhenti bersama; FLAC final tetap stereo valid
 
+## Profil kualitas audio (0.3.0)
+
+- [ ] `config.json` default (`codec: flac`, `quality: archive`) → `data/recordings/<id>.flac`,
+      perilaku sama seperti rilis sebelumnya
+- [ ] Set `codec: opus`, `quality: balanced` → `meeting record --both` menghasilkan
+      `.opus` stereo; transkrip Gemini tetap lengkap (mic kiri, sistem kanan)
+- [ ] Profil Opus dengan ffmpeg tidak tersedia (PATH tanpa ffmpeg) → pesan fallback
+      FLAC di stderr, `.flac` valid dibuat, WAV sumber dibersihkan
+- [ ] Opus meeting panjang (>20 menit) → dipecah jadi beberapa bagian, transkrip
+      sampai akhir dengan penanda "--- Bagian N ---"
+
 ## Transkripsi file
 
 - [ ] `meeting transcribe Zoom.mp4` → job langsung (tanpa ffmpeg)

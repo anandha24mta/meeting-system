@@ -138,7 +138,7 @@ def test_cpu_env_caps_blas_threads():
     assert "PATH" in env  # env lengkap, aman diteruskan ke subprocess
 
 
-def test_encode_and_decode_pass_cpu_env(monkeypatch):
+def test_encode_and_decode_pass_cpu_env(tmp_path, monkeypatch):
     seen = []
     monkeypatch.setattr(codecs, "ffmpeg_bin", lambda: "/usr/bin/ffmpeg")
 
@@ -148,6 +148,7 @@ def test_encode_and_decode_pass_cpu_env(monkeypatch):
         return type("R", (), {"returncode": 0})()
 
     monkeypatch.setattr(codecs.subprocess, "run", fake_run)
-    codecs.encode_opus("in.wav", "out.opus", bitrate_kbps=32, channels=1)
+    out = tmp_path / "out.opus"
+    codecs.encode_opus("in.wav", out, bitrate_kbps=32, channels=1)
     assert seen[0]["OPENBLAS_NUM_THREADS"] == "1"
 
