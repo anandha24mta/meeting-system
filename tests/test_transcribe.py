@@ -267,6 +267,27 @@ def test_split_ffmpeg_raises_clear_error_when_missing(meeting_home, tmp_path, mo
         transcribe._split_ffmpeg(tmp_path / "x.mp4", [(0.0, 10.0)], "job1")
 
 
+def test_split_ffmpeg_stream_copies_lossy_source(meeting_home, tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from meeting import paths
+
+    paths.ensure_dirs()
+    monkeypatch.setattr(transcribe.shutil, "which", lambda name: "/usr/bin/ffmpeg")
+    seen = []
+
+    def fake_run(argv, **kw):
+        seen.append(argv)
+        Path(argv[-1]).write_bytes(b"x")
+        return type("R", (), {"returncode": 0})()
+
+    monkeypatch.setattr(transcribe.subprocess, "run", fake_run)
+    chunks = transcribe._split_ffmpeg(tmp_path / "voice.m4a", [(0.0, 900.0)], "copyjob")
+    assert chunks[0].suffix == ".m4a"
+    assert "copy" in seen[0]
+    assert "-ar" not in seen[0]
+
+
 def test_transcribe_splits_long_audio_and_concatenates_with_markers(
     meeting_home, audio, monkeypatch
 ):
