@@ -134,23 +134,55 @@ def test_flac_stays_default_even_when_quality_set(meeting_home, wav_mono):
     assert out.exists()
 
 
-def test_opus_verify_failure_preserves_wav(meeting_home, wav_mono, monkeypatch):
+def test_opus_verify_failure_falls_back_to_flac(meeting_home, wav_mono, monkeypatch, capsys):
     from meeting import paths
     paths.ensure_dirs()
     _fake_opus_encode(monkeypatch, decode=False)
-    with pytest.raises(finalizer.FinalizeError, match="verify"):
-        finalizer.finalize([wav_mono], "opus-bad", _opus_cfg(meeting_home))
-    assert wav_mono.exists()
+    out = finalizer.finalize([wav_mono], "opus-bad", _opus_cfg(meeting_home))
+    assert out == paths.recordings_dir() / "opus-bad.flac"
+    assert out.exists()
     assert not (paths.recordings_dir() / "opus-bad.opus").exists()
+    assert not wav_mono.exists()  # FLAC fallback terverify dulu, baru WAV dihapus
+    assert "FLAC" in capsys.readouterr().err
 
 
-def test_opus_encode_error_preserves_wav(meeting_home, wav_mono, monkeypatch):
+def test_opus_encode_error_falls_back_to_flac(meeting_home, wav_mono, monkeypatch, capsys):
     from meeting import codecs, paths
     paths.ensure_dirs()
     _fake_opus_encode(monkeypatch, fail=codecs.CodecError("ffmpeg tidak ditemukan"))
-    with pytest.raises(finalizer.FinalizeError, match="ffmpeg"):
-        finalizer.finalize([wav_mono], "opus-fail", _opus_cfg(meeting_home))
+    out = finalizer.finalize([wav_mono], "opus-fail", _opus_cfg(meeting_home))
+    assert out.suffix == ".flac" and out.exists()
+    assert not wav_mono.exists()
+    assert "ffmpeg" in capsys.readouterr().err
+
+
+def test_fallback_failure_never_deletes_wav(meeting_home, wav_mono, monkeypatch):
+    """Opus invalid + FLAC fallback gagal → WAV sumber tetap utuh."""
+    from meeting import paths
+    paths.ensure_dirs()
+    _fake_opus_encode(monkeypatch, decode=False)
+
+    def boom(*_a, **_kw):
+        raise OSError("disk penuh")
+
+    monkeypatch.setattr(finalizer.sf, "write", boom)
+    with pytest.raises(OSError, match="disk penuh"):
+        finalizer.finalize([wav_mono], "opus-nofallback", _opus_cfg(meeting_home))
     assert wav_mono.exists()
+    assert not (paths.recordings_dir() / "opus-nofallback.opus").exists()
+
+
+def test_opus_duration_mismatch_falls_back(meeting_home, wav_mono, monkeypatch):
+    from meeting import paths
+    paths.ensure_dirs()
+    _fake_opus_encode(monkeypatch)
+    monkeypatch.setattr(
+        finalizer.codecs, "probe_duration",
+        lambda p: 30.0 if Path(p).suffix == ".opus" else 1.0,
+    )
+    out = finalizer.finalize([wav_mono], "opus-drift", _opus_cfg(meeting_home))
+    assert out.suffix == ".flac" and out.exists()
+    assert not (paths.recordings_dir() / "opus-drift.opus").exists()
 
 
 def test_opus_two_wavs_merged_to_stereo_stream(meeting_home, tmp_path, monkeypatch):

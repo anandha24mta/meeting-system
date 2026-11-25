@@ -14,6 +14,13 @@ class FinalizeError(RuntimeError):
     pass
 
 
+def _note(msg: str) -> None:
+    """Pemberitahuan fallback — stderr, bukan log API key."""
+    import sys
+
+    print(f"[finalizer] {msg}", file=sys.stderr)
+
+
 def _read_16k_mono(wav: Path) -> np.ndarray:
     data, sr = sf.read(wav, dtype="float32", always_2d=False)
     if data.ndim > 1:  # WAV multi-kanal unexpected → mixdown
@@ -93,6 +100,7 @@ def _finalize_opus(wav_paths: list[Path], out_stem: str, cfg: dict) -> Path:
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     temp_wav: Path | None = None
+    reason: str | None = None
     try:
         if len(wav_paths) == 1 and channels == 1:
             src = wav_paths[0]  # ffmpeg baca file langsung — tidak ada array numpy penuh
@@ -106,18 +114,26 @@ def _finalize_opus(wav_paths: list[Path], out_stem: str, cfg: dict) -> Path:
             bitrate_kbps=bitrate, channels=channels, samplerate=samplerate,
         )
 
+        # verify durasi/frame + decode penuh SEBELUM hapus WAV
+        src_duration = max((codecs.probe_duration(w) or 0.0) for w in wav_paths)
         duration = codecs.probe_duration(out_path)
-        if not duration or duration <= 0 or not codecs.decode_ok(out_path):
+        drift = abs(duration - src_duration) if duration and src_duration else 0.0
+        if (
+            not duration or duration <= 0
+            or not codecs.decode_ok(out_path)
+            or drift > max(1.0, src_duration * 0.1)
+        ):
             raise FinalizeError(f"Opus gagal verify: {out_path.name}")
-    except codecs.CodecError as e:
-        out_path.unlink(missing_ok=True)
-        raise FinalizeError(str(e)) from e
-    except Exception:
-        out_path.unlink(missing_ok=True)
-        raise
+    except Exception as e:
+        reason = f"{type(e).__name__}: {e}"
     finally:
         if temp_wav is not None:
             temp_wav.unlink(missing_ok=True)
+
+    if reason is not None:
+        out_path.unlink(missing_ok=True)  # output cacat tak boleh dikirim ke Gemini
+        _note(f"Opus gagal ({reason}) — fallback ke FLAC (ffmpeg opsional)")
+        return _finalize_flac(wav_paths, out_stem, cfg)
 
     for w in wav_paths:
         w.unlink(missing_ok=True)
