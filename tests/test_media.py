@@ -122,3 +122,61 @@ def test_probe_video_reads_ffprobe_stream_list(monkeypatch):
 def test_probe_video_without_ffprobe_is_false(monkeypatch):
     monkeypatch.setattr(media.shutil, "which", lambda name: None)
     assert media.probe_video("in.mp4") is False
+
+
+def test_crf_and_vfr_args():
+    assert media.crf_args(20) == ["-crf", "20"]
+    assert media.vfr_args() == ["-fps_mode", "vfr"]
+
+
+def test_hwaccel_args_inactive_unless_video_reencode():
+    def boom(*args, **kwargs):
+        raise AssertionError("probe laundry saat audio / video copy")
+
+    assert media.hwaccel_args(False, run=boom) == []
+    assert media.video_encode_argv("in.mp4", "out.mp4", run=boom) == [
+        "-y", "-i", "in.mp4", "-c:v", "copy", "out.mp4",
+    ]
+    assert "-hwaccel" not in media.aac_output_argv("in.flac", "out.m4a", encoders=set())
+    assert "-hwaccel" not in media.passthrough_argv("in.mp4", "out.mp4", encoders=set())
+
+
+def test_probe_hwaccel_prefers_known_accelerators():
+    out = type("R", (), {"stdout": "hwaccels:\nqsv\nd3d11va\ncuda\n"})()
+    assert media.probe_hwaccel("ffmpeg", run=lambda *a, **k: out) == "qsv"
+    out.stdout = "hwaccels:\nnvenc\n"
+    assert media.probe_hwaccel("ffmpeg", run=lambda *a, **k: out) == "nvenc"
+    out.stdout = "hwaccels:\nd3d11va\n"
+    assert media.probe_hwaccel("ffmpeg", run=lambda *a, **k: out) == "d3d11va"
+    out.stdout = "hwaccels:\ncuda\n"
+    assert media.probe_hwaccel("ffmpeg", run=lambda *a, **k: out) == "auto"
+    out.stdout = "hwaccels:\n"
+    assert media.probe_hwaccel("ffmpeg", run=lambda *a, **k: out) is None
+
+
+def test_probe_hwaccel_without_ffmpeg_is_none(monkeypatch):
+    monkeypatch.setattr(media.shutil, "which", lambda name: None)
+    assert media.probe_hwaccel() is None
+
+
+def test_video_encode_argv_reencode_orders_hwaccel_before_input():
+    out = type("R", (), {"stdout": "hwaccels:\nqsv\n"})()
+    argv = media.video_encode_argv(
+        "in.mp4", "out.mp4", video_reencode=True, ffmpeg="ffmpeg",
+        run=lambda *a, **k: out,
+    )
+    assert argv[:2] == ["-hwaccel", "qsv"]
+    assert argv.index("-hwaccel") < argv.index("-i")
+    assert argv[argv.index("-crf") + 1] == "23"
+    assert argv[argv.index("-fps_mode") + 1] == "vfr"
+    assert "-c:a" not in argv
+    assert argv[-1] == "out.mp4"
+
+
+def test_video_encode_argv_reencode_without_vfr_and_explicit_hwaccel():
+    argv = media.video_encode_argv(
+        "in.mp4", "out.mp4", video_reencode=True, vfr=False, hwaccel="nvenc",
+        run=lambda *a, **k: (_ for _ in ()).throw(AssertionError("probe tak perlu")),
+    )
+    assert "-fps_mode" not in argv
+    assert argv[:2] == ["-hwaccel", "nvenc"]

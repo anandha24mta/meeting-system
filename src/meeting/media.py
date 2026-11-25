@@ -1,4 +1,5 @@
-"""ffmpeg-backed audio/container helpers. ffmpeg opsional; FLAC tetap default."""
+"""ffmpeg-backed audio/container helpers. ffmpeg opsional; FLAC tetap default.
+Tak ada video capture hari ini — video hanya berasal dari file sumber dan di-copy."""
 from __future__ import annotations
 
 import shutil
@@ -122,6 +123,63 @@ def probe_video(path: Path | str, *, ffprobe: str | None = None, run=None) -> bo
     except Exception:
         return False
     return bool(out.stdout.strip())
+
+
+def crf_args(crf: int = 23) -> list[str]:
+    return ["-crf", str(crf)]
+
+
+def vfr_args() -> list[str]:
+    return ["-fps_mode", "vfr"]
+
+
+def probe_hwaccel(ffmpeg: str | None = None, run=None) -> str | None:
+    """Probe malas: hanya dipanggil saat video akan di-re-encode."""
+    ffmpeg = ffmpeg or shutil.which("ffmpeg")
+    if not ffmpeg:
+        return None
+    run = run or subprocess.run
+    try:
+        out = run(
+            [ffmpeg, "-hide_banner", "-hwaccels"], capture_output=True, text=True, timeout=30
+        )
+    except Exception:
+        return None
+    available = {
+        line.strip() for line in out.stdout.splitlines()
+        if line.strip() and line.strip().rstrip(":") != "hwaccels"
+    }
+    for name in ("qsv", "nvenc", "d3d11va"):
+        if name in available:
+            return name
+    return "auto" if available else None
+
+
+def hwaccel_args(
+    video_reencode: bool = False, *, ffmpeg: str | None = None,
+    requested: str | None = None, run=None,
+) -> list[str]:
+    if not video_reencode:
+        return []
+    choice = requested or probe_hwaccel(ffmpeg, run)
+    return ["-hwaccel", choice] if choice else []
+
+
+def video_encode_argv(
+    src: Path | str, dst: Path | str, *, crf: int = 23, vfr: bool = True,
+    video_reencode: bool = False, hwaccel: str | None = None,
+    ffmpeg: str | None = None, run=None,
+) -> list[str]:
+    """Video copy by default; re-encode only on explicit opt-in."""
+    args = hwaccel_args(video_reencode, ffmpeg=ffmpeg, requested=hwaccel, run=run)
+    args += ["-y", "-i", str(src)]
+    if video_reencode:
+        args += ["-c:v", "libx264", *crf_args(crf)]
+        if vfr:
+            args += vfr_args()
+    else:
+        args += ["-c:v", "copy"]
+    return [*args, str(dst)]
 
 
 def encode_aac(
