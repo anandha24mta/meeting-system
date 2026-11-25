@@ -8,7 +8,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import config, indexmd, paths
+from . import config, hwaccel, indexmd, paths
 
 _AUDIO_MIME = {
     ".mp4": "audio/mp4", ".m4a": "audio/mp4", ".webm": "audio/webm",
@@ -216,7 +216,10 @@ def _prepare_chunks(audio_path: Path, job_id: str) -> list[tuple[Path, float]]:
     return [(cp, start) for cp, (start, _length) in zip(chunk_paths, offsets)]
 
 
-def _rms(audio_path: Path) -> float:
+GPU_ANALYSIS_MIN_SEC = 300.0
+
+
+def _cpu_rms(audio_path: Path) -> float:
     """RMS over streamed blocks; peak RAM is one block, not the whole file."""
     import numpy as np
 
@@ -230,6 +233,41 @@ def _rms(audio_path: Path) -> float:
     if count == 0:
         return 0.0
     return float(np.sqrt(total / count))
+
+
+def _gpu_rms(audio_path: Path) -> float:
+    """Optional CuPy RMS; GPU library imported only after explicit opt-in."""
+    import cupy as cp
+
+    total = 0.0
+    count = 0
+    for block in _iter_audio_blocks(audio_path):
+        if block.ndim > 1:
+            block = block.mean(axis=1)
+        array = cp.asarray(block)
+        total += float(cp.sum(array * array).get())
+        count += len(block)
+    if count == 0:
+        return 0.0
+    return float((total / count) ** 0.5)
+
+
+def _should_use_gpu(audio_path: Path) -> bool:
+    if config.load().get("analysis_device") != "gpu":
+        return False
+    if not hwaccel.probe().get("available"):
+        return False
+    duration = _probe_duration(audio_path)
+    return duration is not None and duration >= GPU_ANALYSIS_MIN_SEC
+
+
+def _rms(audio_path: Path) -> float:
+    if _should_use_gpu(audio_path):
+        try:
+            return _gpu_rms(audio_path)
+        except Exception:
+            pass
+    return _cpu_rms(audio_path)
 
 
 def _is_silent(audio_path: Path) -> bool:
