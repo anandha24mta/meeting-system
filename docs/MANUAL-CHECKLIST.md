@@ -50,6 +50,24 @@ passthrough source mp4/mkv (`-c:v copy`); tool ini tidak melakukan video capture
 - [ ] Meeting panjang (>20 menit) → transcript.md lengkap sampai akhir,
       ada penanda "--- Bagian N (mulai ≈ ...) ---" per potongan
 
+## Codec & container (opt-in)
+
+- [ ] Set `"audio_codec": "aac"`, `"container": "m4a"` di config.json →
+      `meeting record` 10 detik → `data/recordings/<id>.m4a` bisa diputar di
+      Windows Media Player/VLC (AAC-LC, bukan HE-AAC); `meta.json` berisi
+      `codec: aac`, `container: m4a`, `vbr: true`, `bitrate` ≈ 64000 mono
+- [ ] File m4a hasil rekaman di-upload Gemini tanpa error mime/code 13 —
+      `meeting status` done, `transcript.md` berisi ucapan nyata (bukan kosong)
+- [ ] `meeting transcribe zoom.mp4` dengan `audio_codec: aac` → video stream
+      ikut ter-remux byte-identical: bandingkan
+      `ffmpeg -i asli.mp4 -map 0:v -c copy -f md5 -` dengan hasil di `data/tmp/`;
+      `meta.json` berisi `video_passthrough: true`, `vfr: true`; VFR tidak
+      berubah (durasi & timestamp sama), tidak ada re-encode video
+- [ ] Ulangi untuk `.mkv` dengan video VFR → sama, container tetap mkv
+- [ ] Tanpa ffmpeg di PATH: `meeting record` tetap menghasilkan `.flac` dan
+      transkrip selesai; `meeting transcribe file.mp4` langsung diproses;
+      format eksotis memberi pesan satu kalimat `winget install ffmpeg`
+
 ## Worker
 
 - [ ] Dua job cepat berturut → diproses FIFO, satu worker (cek `data/worker.log`)
